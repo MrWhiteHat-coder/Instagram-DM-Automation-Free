@@ -9,7 +9,7 @@ Someone comments a keyword like **`REPO`** on your reel → they get a DM with a
 - **Guided setup**: after you deploy, the dashboard walks you through six steps and ticks each one off by itself.
 - **Approval kit**: everything Meta's App Review asks for, ready to copy — reviewer instructions, permission descriptions, screen-recording plan, a hosted privacy policy page and a 1024×1024 app icon.
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/YOUR_GITHUB_USERNAME/ig-comment-dm)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/MrWhiteHat-coder/Instagram-DM-Automation-Free)
 
 > **Read this before you start.** Meta's rules apply to every tool like this, including paid ones.
 > Until Meta approves **your** Meta app (App Review + Business Verification, then switched to *Live*), AutoDM only replies to Instagram accounts you added as **testers** in that app. Real followers need the approval. Details in [Going public](#going-public).
@@ -73,8 +73,8 @@ You need: an Instagram **Professional** account (Business or Creator) that is **
 **Option B — command line** (Node.js 20+):
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USERNAME/ig-comment-dm.git
-cd ig-comment-dm
+git clone https://github.com/MrWhiteHat-coder/Instagram-DM-Automation-Free.git
+cd Instagram-DM-Automation-Free
 npm install
 npx wrangler login
 npx wrangler secret put META_APP_SECRET
