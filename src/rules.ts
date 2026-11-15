@@ -36,12 +36,17 @@ export interface Settings {
   onFollowCheckError: "send_link" | "ask_follow";
   /** Added to the first DM when Meta refuses the button version and plain text is sent instead. */
   fallbackHint: string;
+  /** Shown on the public /privacy page that Meta's App Review asks for. */
+  ownerName: string;
+  contactEmail: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   cooldownDays: 7,
   onFollowCheckError: "send_link",
   fallbackHint: "Reply YES to get the link.",
+  ownerName: "",
+  contactEmail: "",
 };
 
 /** Lowercase, unify compatibility forms, collapse whitespace. */
@@ -156,7 +161,12 @@ export function parseSettingsInput(input: any): { settings?: Settings; errors: R
   if (!Number.isInteger(cooldownDays) || cooldownDays < 0 || cooldownDays > 365) errors.cooldownDays = "Use a whole number from 0 to 365.";
   const onFollowCheckError = input?.onFollowCheckError === "ask_follow" ? "ask_follow" : "send_link";
   const fallbackHint = str(input?.fallbackHint, 200) || DEFAULT_SETTINGS.fallbackHint;
-  return Object.keys(errors).length ? { errors } : { settings: { cooldownDays, onFollowCheckError, fallbackHint }, errors };
+  const ownerName = str(input?.ownerName, 100);
+  const contactEmail = str(input?.contactEmail, 200);
+  if (contactEmail && !/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(contactEmail)) errors.contactEmail = "Enter a valid email address.";
+  return Object.keys(errors).length
+    ? { errors }
+    : { settings: { cooldownDays, onFollowCheckError, fallbackHint, ownerName, contactEmail }, errors };
 }
 
 export function newId(): string {

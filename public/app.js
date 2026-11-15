@@ -47,8 +47,9 @@ const ICONS = {
   play: '<path d="m6 4 14 8-14 8z"/>',
 };
 const icon = (name, cls = "") => `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] ?? ""}</svg>`;
-const BRAND_SVG =
-  '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 10a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4h-6l-5 4.5V22a4 4 0 0 1-3-4z" fill="#fff"/><path d="M17.5 9.5 13 16h3.2l-1.2 5 4.5-6.5h-3.2z" fill="#9a52f6"/></svg>';
+const BUBBLE_PATH = "M7 10a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4h-6l-5 4.5V22a4 4 0 0 1-3-4z";
+const BOLT_PATH = "M17.5 9.5 13 16h3.2l-1.2 5 4.5-6.5h-3.2z";
+const BRAND_SVG = `<svg viewBox="0 0 32 32" aria-hidden="true"><path class="b1" d="${BUBBLE_PATH}"/><path class="b2" d="${BOLT_PATH}"/></svg>`;
 
 function timeAgo(ts) {
   const s = Math.round((Date.now() - ts) / 1000);
@@ -158,8 +159,19 @@ const state = {
   overview: null,
   rules: null,
   media: null,
+  reviewProgress: null,
+  setupLeft: null,
   dirty: false,
 };
+
+async function loadOverview(tz = new Date().getTimezoneOffset()) {
+  const [ov, rp] = await Promise.all([api(`/api/overview?tz=${tz}`), api("/api/review-progress")]);
+  state.overview = ov;
+  state.account = ov.account;
+  state.reviewProgress = rp.progress;
+  state.setupLeft = setupSteps(ov).filter((s) => !s.done).length;
+  return ov;
+}
 
 const EVENT_META = {
   comment_matched: { label: "Comment matched", tone: "blue", icon: "comment" },
@@ -201,6 +213,7 @@ const NAV = [
   { href: "#/automations", key: "automations", label: "Automations", icon: "bolt" },
   { href: "#/activity", key: "activity", label: "Activity", icon: "activity" },
   { href: "#/setup", key: "setup", label: "Setup", icon: "book" },
+  { href: "#/approval", key: "approval", label: "Get approved", icon: "shield" },
   { href: "#/settings", key: "settings", label: "Settings", icon: "settings" },
 ];
 
@@ -220,7 +233,9 @@ function renderShell(activeKey, contentHtml) {
         <div class="nav-label">Workspace</div>
         ${NAV.map(
           (n) => `<a class="nav-item ${n.key === activeKey ? "active" : ""}" href="${n.href}" ${n.key === activeKey ? 'aria-current="page"' : ""}>
-            ${icon(n.icon)}<span>${n.label}</span>${n.key === "automations" && activeCount !== null ? `<span class="count">${activeCount}</span>` : ""}
+            ${icon(n.icon)}<span>${n.label}</span>${n.key === "automations" && activeCount !== null ? `<span class="count">${activeCount}</span>` : ""}${
+              n.key === "setup" && state.setupLeft ? `<span class="count todo" title="Steps left">${state.setupLeft}</span>` : ""
+            }
           </a>`,
         ).join("")}
         <div class="sidebar-foot">
@@ -321,9 +336,7 @@ function chartSvg(series) {
         <rect class="bar-b" x="${cx - wb / 2}" y="${y(0) - hb}" width="${wb}" height="${hb}" rx="4"/>${label}</g>`;
     })
     .join("");
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Comments matched and links delivered per day, last 14 days">
-    <defs><linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b04df5"/><stop offset="1" stop-color="#6d5efc"/></linearGradient></defs>
-    ${grid}${bars}</svg>`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Comments matched and links delivered per day, last 14 days">${grid}${bars}</svg>`;
 }
 
 function kpi(label, value, sub, tone, ic) {
@@ -331,34 +344,22 @@ function kpi(label, value, sub, tone, ic) {
     <div class="value">${num(value)}</div><div class="sub">${sub}</div></div>`;
 }
 
-function setupSteps(ov) {
+/** The six setup steps. `rp` is the approval-kit progress. */
+function setupSteps(ov, rp = state.reviewProgress ?? {}) {
   const s = ov.setup;
   return [
-    {
-      done: s.secrets.appSecret && s.secrets.verifyToken && s.secrets.accessToken,
-      title: "Add your secrets",
-      desc: "META_APP_SECRET, IG_ACCESS_TOKEN and WEBHOOK_VERIFY_TOKEN in Cloudflare.",
-    },
-    {
-      done: s.tokenWorks,
-      title: "Connect Instagram",
-      desc: s.tokenWorks ? `Connected as @${esc(ov.account.username)}` : esc(ov.accountError || "Token not working yet."),
-    },
-    {
-      done: Boolean(s.lastWebhookAt),
-      title: "Connect the webhook",
-      desc: s.lastWebhookAt ? `Last event ${timeAgo(s.lastWebhookAt)}` : "Paste your callback URL into Meta and subscribe the fields.",
-    },
-    { done: s.activeRules > 0, title: "Turn on an automation", desc: s.activeRules ? `${s.activeRules} active` : "Create your first keyword flow." },
+    { id: "app", title: "Create a Meta app", done: s.tokenWorks },
+    { id: "connect", title: "Connect Instagram", done: s.tokenWorks && s.secrets.appSecret },
+    { id: "webhook", title: "Connect the webhook", done: Boolean(s.lastWebhookAt) },
+    { id: "automation", title: "Create an automation", done: s.activeRules > 0 },
+    { id: "test", title: "Test with a second account", done: (ov.totals.dm_sent || 0) > 0 },
+    { id: "approve", title: "Get approved by Meta", done: Boolean(rp.live) },
   ];
 }
 
 async function viewOverview() {
   renderShell("overview", `<div class="page">${pageHead("Overview", "Loading…")}<div class="grid grid-4">${'<div class="card kpi skeleton" style="height:132px"></div>'.repeat(4)}</div></div>`);
-  const tz = new Date().getTimezoneOffset();
-  const [ov, ev] = await Promise.all([api(`/api/overview?tz=${tz}`), api("/api/events?limit=6")]);
-  state.overview = ov;
-  state.account = ov.account;
+  const [ov, ev] = await Promise.all([loadOverview(), api("/api/events?limit=6")]);
   const t = ov.totals;
   const matched = t.comment_matched || 0, dms = t.dm_sent || 0, taps = t.button_tap || 0, links = t.link_sent || 0;
   const steps = setupSteps(ov);
@@ -372,11 +373,9 @@ async function viewOverview() {
   const html = `<div class="page">
     ${pageHead(hello, "Here is how your comment automations did in the last 14 days.", `${statusPill}<a class="btn primary" href="#/automations/new">${icon("plus")} New automation</a>`)}
     ${allDone ? "" : `
-      <div class="card card-pad" style="margin-bottom:16px">
-        <div class="row" style="margin-bottom:6px"><span class="kpi-icon tone-violet" style="width:32px;height:32px;border-radius:10px;display:grid;place-items:center">${icon("sparkle")}</span>
-          <div><h3 style="font-size:15px">Finish setting up</h3><p class="muted small" style="margin:2px 0 0">${steps.filter((s) => s.done).length} of ${steps.length} done</p></div>
-          <span class="spacer"></span><a class="btn sm" href="#/setup">Open setup guide</a></div>
-        <ul class="check-list">${steps.map((s, i) => `<li class="check-item ${s.done ? "done" : ""}"><span class="check-badge">${s.done ? icon("check", "sm") : i + 1}</span><div class="body"><b>${esc(s.title)}</b><p>${s.desc}</p></div></li>`).join("")}</ul>
+      <div class="callout strong" style="margin-bottom:16px;align-items:center">
+        ${icon("sparkle")}<div style="flex:1"><b>Finish setup · ${steps.filter((s) => s.done).length} of ${steps.length} done</b><p>Next: ${esc(steps.find((s) => !s.done).title)}</p></div>
+        <a class="btn sm" href="#/setup">Continue setup</a>
       </div>`}
     <div class="grid grid-4">
       ${kpi("Comments matched", matched, "keyword comments", "blue", "comment")}
@@ -387,7 +386,7 @@ async function viewOverview() {
     <div class="grid grid-2" style="margin-top:16px">
       <div class="card">
         <div class="card-head"><div><h3>Daily activity</h3><p>Last 14 days</p></div>
-          <div class="legend"><span><i style="background:var(--accent-soft)"></i>Matched</span><span><i style="background:var(--grad)"></i>Links</span></div></div>
+          <div class="legend"><span><i class="la"></i>Matched</span><span><i class="lb"></i>Links</span></div></div>
         <div style="padding:10px 14px 14px">${chartSvg(ov.series)}</div>
       </div>
       <div class="card">
@@ -509,7 +508,7 @@ function confirmModal(title, message, confirmLabel = "Delete") {
       title,
       narrow: true,
       body: `<p style="margin:0;color:var(--text-2)">${message}</p>`,
-      footer: `<button class="btn" data-x="no">Cancel</button><button class="btn primary" data-x="yes" style="background:var(--danger);box-shadow:none">${esc(confirmLabel)}</button>`,
+      footer: `<button class="btn" data-x="no">Cancel</button><button class="btn danger-solid" data-x="yes">${esc(confirmLabel)}</button>`,
       onMount: (root) => {
         $("[data-x=no]", root).onclick = () => (closeModal(), resolve(false));
         $("[data-x=yes]", root).onclick = () => (closeModal(), resolve(true));
@@ -982,47 +981,326 @@ async function viewSettings() {
   });
 }
 
-/* ======================= setup guide ======================= */
-async function viewSetup() {
-  renderShell("setup", `<div class="page">${pageHead("Setup guide", "Loading…")}<div class="card skeleton" style="height:420px"></div></div>`);
-  const ov = await api(`/api/overview?tz=0`);
-  state.account = ov.account;
+/* ======================= setup wizard ======================= */
+let wzActive = null;
+
+const ext = (href, label) => `<a class="btn sm" href="${href}" target="_blank" rel="noopener noreferrer">${esc(label)} ${icon("external", "sm")}</a>`;
+const kbd = (t) => `<span class="kbd">${esc(t)}</span>`;
+const copyBox = (text, id = "") =>
+  `<div class="copy-box"><code ${id ? `id="${id}"` : ""}>${esc(text)}</code><button class="btn sm" data-action="copy" data-text="${esc(text)}">${icon("copy", "sm")} Copy</button></div>`;
+const copyArea = (text) =>
+  `<div class="copy-area"><pre>${esc(text)}</pre><button class="btn sm" data-action="copy" data-text="${esc(text)}">${icon("copy", "sm")} Copy</button></div>`;
+
+function wizardContent(id, ov) {
   const s = ov.setup;
+  const user = ov.account?.username;
+  const firstRule = state.rules?.find((r) => r.enabled) ?? state.rules?.[0];
+  const kw = firstRule?.keywords?.[0] ?? "REPO";
+  switch (id) {
+    case "app":
+      return {
+        kicker: "Step 1 · about 5 minutes",
+        title: "Create your Meta app",
+        lead: "A Meta app is the free “key” that lets AutoDM reply on Instagram for you. Only you use it.",
+        body: `
+          <div class="callout" style="margin-bottom:20px">${icon("info")}<div><b>Before you start</b><p>Your Instagram must be a <b>Professional</b> account (Business or Creator) and <b>public</b>. In the Instagram app, look for “Switch to professional account” in settings.</p></div></div>
+          <ol class="wz-list">
+            <li><b>Open Meta for Developers</b><p>Log in with Facebook. If asked, finish the short developer sign-up.</p><div style="margin-top:8px">${ext("https://developers.facebook.com/apps", "Open Meta for Developers")}</div></li>
+            <li><b>Create the app</b><p>Click ${kbd("Create app")} → use case ${kbd("Other")} → ${kbd("Next")} → type ${kbd("Business")} → ${kbd("Next")}. Name it anything, for example <i>AutoDM</i>, add your email and create it.</p></li>
+            <li><b>Add Instagram</b><p>On the app's page find <b>Instagram</b> and click ${kbd("Set up")}. You land on <b>API setup with Instagram login</b> — keep this tab open for the next step.</p></li>
+          </ol>`,
+      };
+    case "connect":
+      return {
+        kicker: "Step 2 · about 3 minutes",
+        title: "Connect your Instagram",
+        lead: "Give AutoDM permission to read comments and send DMs on your account.",
+        body: `
+          <ol class="wz-list">
+            <li><b>Add your account</b><p>In <b>API setup with Instagram login</b>, under “Generate access tokens”, click ${kbd("Add account")} and log in to Instagram.</p></li>
+            <li><b>Generate a token</b><p>Click ${kbd("Generate token")}, allow all permissions and copy the long token.</p></li>
+            <li><b>Copy the app secret</b><p>On the same page click ${kbd("Show")} next to <b>Instagram app secret</b> and copy it.</p></li>
+            <li><b>Paste both into Cloudflare</b><p>Cloudflare dashboard → <b>Workers &amp; Pages</b> → your worker → <b>Settings</b> → <b>Variables and Secrets</b>. Set <code>IG_ACCESS_TOKEN</code> to the token and <code>META_APP_SECRET</code> to the secret. If you used the Deploy button you entered them already — only update them if this step shows an error.</p><div style="margin-top:8px">${ext("https://dash.cloudflare.com/?to=/:account/workers-and-pages", "Open Cloudflare")}</div></li>
+          </ol>
+          ${s.tokenWorks
+            ? `<div class="status-line ok">${icon("check")} Connected as @${esc(user)}</div>`
+            : `<div class="status-line bad">${icon("alert")} ${esc(ov.accountError || "Not connected yet")}</div>`}
+          ${s.tokenWorks && !s.secrets.appSecret ? `<div class="status-line bad">${icon("alert")} META_APP_SECRET is not set yet</div>` : ""}`,
+      };
+    case "webhook":
+      return {
+        kicker: "Step 3 · about 2 minutes",
+        title: "Connect the webhook",
+        lead: "This tells Instagram to notify AutoDM the moment someone comments.",
+        body: `
+          <ol class="wz-list">
+            <li><b>Open “Configure webhooks” in Meta</b><p>Still in <b>API setup with Instagram login</b>, find the webhooks section.</p></li>
+            <li><b>Paste these two values</b>
+              <div class="label" style="margin-top:10px">Callback URL</div>${copyBox(s.webhookUrl)}
+              <div class="label" style="margin-top:12px">Verify token</div>
+              <div class="copy-box"><code id="vt">••••••••••••••</code><button class="btn sm" data-action="reveal-vt">${icon("eye", "sm")} Show</button><button class="btn sm" data-action="copy-vt">${icon("copy", "sm")} Copy</button></div>
+              <p style="margin-top:10px">Click ${kbd("Verify and save")}.</p></li>
+            <li><b>Turn on three fields</b><p>Subscribe to <code>comments</code>, <code>messages</code> and <code>messaging_postbacks</code>.</p></li>
+            <li><b>Switch on notifications for your account</b><p>One click here:</p><div style="margin-top:8px"><button class="btn primary sm" data-action="subscribe">${icon("bolt", "sm")} Subscribe my account</button></div></li>
+          </ol>
+          ${s.lastWebhookAt
+            ? `<div class="status-line ok">${icon("check")} Receiving events · last one ${timeAgo(s.lastWebhookAt)}</div>`
+            : `<div class="status-line">${icon("clock")} Waiting for the first event. Tip: press ${kbd("Test")} next to <code>comments</code> in Meta, then “Check again”.</div>`}`,
+      };
+    case "automation":
+      return {
+        kicker: "Step 4 · 1 minute",
+        title: "Create your first automation",
+        lead: "Choose the keyword, write the DM, add your link. A ready-made template is filled in for you.",
+        body: `
+          <a class="btn primary lg" href="#/automations/new">${icon("plus")} Create from template</a>
+          ${s.activeRules
+            ? `<div class="status-line ok" style="margin-top:18px">${icon("check")} ${s.activeRules} automation${s.activeRules > 1 ? "s" : ""} active</div>`
+            : ""}`,
+      };
+    case "test":
+      return {
+        kicker: "Step 5 · about 5 minutes",
+        title: "Test with a second account",
+        lead: "Until Meta approves your app, only Instagram accounts you add as testers get DMs. Use a friend's or a second account.",
+        body: `
+          <ol class="wz-list">
+            <li><b>Add a tester</b><p>In your Meta app: ${kbd("App roles")} → ${kbd("Roles")} → add the second Instagram account as <b>Instagram Tester</b>.</p></li>
+            <li><b>Accept the invite</b><p>On the second account, accept the tester invite (usually in Instagram settings under apps and websites, or from the email Meta sends).</p></li>
+            <li><b>Comment the keyword</b><p>From the second account, comment <code>${esc(kw)}</code> on any of ${user ? `@${esc(user)}'s` : "your"} posts. Within seconds you should see the public reply and the DM.</p></li>
+          </ol>
+          ${(ov.totals.dm_sent || 0) > 0
+            ? `<div class="status-line ok">${icon("check")} It works — ${num(ov.totals.dm_sent)} DM${ov.totals.dm_sent > 1 ? "s" : ""} sent in the last 14 days</div>`
+            : `<div class="status-line">${icon("clock")} No DM sent yet. Watch <a href="#/activity">Activity</a> while you test.</div>`}`,
+      };
+    case "approve":
+      return {
+        kicker: "Step 6 · about 1 week (Meta's review)",
+        title: "Get approved by Meta",
+        lead: "This is what lets AutoDM reply to all your followers, not just testers. We prepared every text, link and file Meta asks for.",
+        body: `<a class="btn primary lg" href="#/approval">${icon("shield")} Open the approval kit</a>`,
+      };
+  }
+}
+
+async function viewSetup() {
+  renderShell("setup", `<div class="page">${pageHead("Setup", "Loading…")}<div class="card skeleton" style="height:460px"></div></div>`);
+  const [ov] = await Promise.all([loadOverview(), state.rules ? null : loadRules().catch(() => null)]);
   const steps = setupSteps(ov);
-  const fields = "comments,messages,messaging_postbacks";
-  const item = (i, done, title, body) =>
-    `<li class="check-item ${done ? "done" : ""}"><span class="check-badge">${done ? icon("check", "sm") : i}</span><div class="body"><b>${title}</b>${body}</div></li>`;
+  const doneCount = steps.filter((s) => s.done).length;
+  if (!wzActive || !steps.some((s) => s.id === wzActive)) wzActive = (steps.find((s) => !s.done) ?? steps[0]).id;
+  const idx = steps.findIndex((s) => s.id === wzActive);
+  const c = wizardContent(wzActive, ov);
+  const prev = steps[idx - 1];
+  const next = steps[idx + 1];
+
   renderShell(
     "setup",
-    `<div class="page" style="max-width:880px">
-    ${pageHead("Setup guide", "Connect your Instagram professional account in about 15 minutes. Everything here uses Meta's official API.")}
-    <div class="callout warn" style="margin-bottom:16px">${icon("alert")}<div><b>Before it works for everyone</b><p>Until Meta approves your app (App Review + Business Verification, then switch it to Live), only accounts added as testers in your Meta app get DMs. Meta says a review decision usually comes within a week.</p></div></div>
-    <div class="card card-pad"><ul class="check-list">
-      ${item(1, steps[0].done, "Create a Meta app",
-        `<p>Go to <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener noreferrer">developers.facebook.com/apps ${icon("external", "sm")}</a> → Create app → use case <b>Other</b> → type <b>Business</b>. Add the <b>Instagram</b> product and choose <b>API setup with Instagram login</b>.</p>`)}
-      ${item(2, s.tokenWorks, "Connect your Instagram account",
-        `<p>On the same page: Add account → log in → <b>Generate token</b>. Allow <code>instagram_business_basic</code>, <code>instagram_business_manage_comments</code> and <code>instagram_business_manage_messages</code>. Put the token in the <code>IG_ACCESS_TOKEN</code> secret and the Instagram app secret in <code>META_APP_SECRET</code>.</p>
-        ${s.tokenWorks ? `<div class="pill" style="margin-top:10px">${avatarHtml(ov.account)} Connected as @${esc(ov.account.username)}</div>` : `<div class="callout danger small" style="margin-top:10px">${icon("alert", "sm")}<div>${esc(ov.accountError || "Not connected yet.")}</div></div>`}`)}
-      ${item(3, Boolean(s.lastWebhookAt), "Add the webhook in Meta",
-        `<p>In <b>Configure webhooks</b> paste these, then Verify and save:</p>
-        <div class="label" style="margin-top:10px">Callback URL</div>
-        <div class="copy-box"><code>${esc(s.webhookUrl)}</code><button class="btn sm" data-action="copy" data-text="${esc(s.webhookUrl)}">${icon("copy", "sm")} Copy</button></div>
-        <div class="label" style="margin-top:10px">Verify token</div>
-        <div class="copy-box"><code id="vt">••••••••••••</code><button class="btn sm" data-action="reveal-vt">${icon("eye", "sm")} Show</button><button class="btn sm" data-action="copy-vt">${icon("copy", "sm")} Copy</button></div>
-        <p style="margin-top:10px">Subscribe to <code>comments</code>, <code>messages</code> and <code>messaging_postbacks</code>.</p>`)}
-      ${item(4, Boolean(s.lastWebhookAt), "Turn on notifications for your account",
-        `<p>One click. This calls <code>POST /me/subscribed_apps</code> with your token.</p>
-        <div class="row" style="margin-top:10px"><button class="btn primary sm" data-action="subscribe" data-fields="${fields}">${icon("bolt", "sm")} Subscribe my account</button>
-        <span class="muted small">${s.lastWebhookAt ? `Last event received ${timeAgo(s.lastWebhookAt)}` : "No events received yet"}</span></div>`)}
-      ${item(5, s.activeRules > 0, "Create an automation",
-        `<p>Pick a keyword, write the DM and add your link.</p><a class="btn sm" style="margin-top:10px" href="#/automations/new">${icon("plus", "sm")} New automation</a>`)}
-      ${item(6, false, "Test with a second account",
-        `<p>In the Meta app: App roles → Roles → add the second account as an <b>Instagram Tester</b> and accept the invite on that account. Comment your keyword on a post and watch <a href="#/activity">Activity</a>.</p>`)}
-      ${item(7, false, "Go public",
-        `<p>Complete <b>Business Verification</b> and <b>App Review</b> for the three permissions (screen recording of this flow, privacy policy URL, app icon), then switch the app to <b>Live</b>. See the README for details.</p>`)}
-    </ul></div>
+    `<div class="page">
+    ${pageHead("Setup", "Six short steps. AutoDM checks each one for you.")}
+    <div class="wizard">
+      <aside class="wz-side">
+        <div class="wz-progress"><div class="row"><span>${doneCount} of ${steps.length} done</span><span>${pct(doneCount, steps.length)}%</span></div>
+          <div class="progress"><div style="width:${pct(doneCount, steps.length)}%"></div></div></div>
+        <ol class="wz-steps">${steps
+          .map(
+            (s, i) => `<li><button class="wz-step ${s.done ? "done" : ""} ${s.id === wzActive ? "active" : ""}" data-action="wz-go" data-step="${s.id}" ${s.id === wzActive ? 'aria-current="step"' : ""}>
+            <span class="check-badge">${s.done ? icon("check", "sm") : i + 1}</span>${esc(s.title)}</button></li>`,
+          )
+          .join("")}</ol>
+      </aside>
+      <section class="card wz-panel" aria-live="polite">
+        <div class="wz-kicker">${esc(c.kicker)}</div>
+        <h2>${esc(c.title)}</h2>
+        <p class="lead">${esc(c.lead)}</p>
+        ${c.body}
+        <div class="wz-foot">
+          ${prev ? `<button class="btn ghost" data-action="wz-go" data-step="${prev.id}">${icon("arrowLeft", "sm")} Back</button>` : ""}
+          <span class="spacer"></span>
+          <button class="btn" data-action="wz-check">${icon("refresh", "sm")} Check again</button>
+          ${next ? `<button class="btn primary" data-action="wz-go" data-step="${next.id}">Next step</button>` : ""}
+        </div>
+      </section>
+    </div></div>`,
+  );
+}
+
+/* ======================= approval kit ======================= */
+const KIT_KEYS = ["calls", "settings", "verification", "instructions", "permissions", "recording", "submit", "live"];
+const openKit = new Set();
+
+function kitTexts(ov) {
+  const user = ov.account?.username ? `@${ov.account.username}` : "@your_account";
+  const r = state.rules?.find((x) => x.enabled) ?? state.rules?.[0] ?? TEMPLATE;
+  const kw = r.keywords[0] ?? "REPO";
+  const where = r.mediaId === "any" ? `any post or reel on ${user}` : `this post on ${user}: ${r.mediaCaption || "(the selected post)"}`;
+  const follow = r.requireFollow
+    ? `\n4. Tap "${r.dmButton}". If your test account does not follow ${user}, you receive a message asking you to follow, with the button "${r.followButton}". Follow ${user} and tap "${r.followButton}".\n5. You receive the final message with the link.`
+    : `\n4. Tap "${r.dmButton}". You receive the final message with the link.`;
+
+  const instructions = `AutoDM is used only by the owner of the Instagram professional account ${user} to reply to people who comment a keyword on the account's posts. It does not offer login to other businesses.
+
+How to test (no login needed):
+1. With any Instagram account, open ${where}.
+2. Comment the word "${kw}".
+3. Within a few seconds you get a public reply under your comment and a direct message from ${user} with a button "${r.dmButton}".${follow}
+
+Your test account must be added as an Instagram Tester while the app is in development, or the app must be approved for Advanced Access.
+
+The owner manages automations in a private dashboard at ${location.origin} (password protected). Dashboard password for reviewers, if needed: [ADD A TEMPORARY PASSWORD OR REMOVE THIS LINE]`;
+
+  const perms = {
+    instagram_business_basic: `AutoDM uses instagram_business_basic to read the connected professional account's ID, username and profile picture, which are shown in the owner's dashboard, and to list the account's own posts and reels so the owner can choose which post an automation applies to. It is also needed to refresh the account's long-lived access token. AutoDM only accesses the single account owned by the app owner.`,
+    instagram_business_manage_comments: `AutoDM uses instagram_business_manage_comments to receive webhook notifications when someone comments on the owner's posts or reels, to check whether the comment contains a keyword the owner configured (for example "${kw}"), and to post one short public reply under that comment (for example "${r.publicReplies?.[0] || "Check your DM"}"). AutoDM does not hide, delete or moderate comments and does not read comments for any other purpose.`,
+    instagram_business_manage_messages: `AutoDM uses instagram_business_manage_messages to send one private reply to a person who commented the configured keyword, to receive the postback when that person taps the button in the message, to check whether they follow the account (is_user_follow_business) when the owner requires it, and to send them the link they asked for. Messages are only sent to people who commented the keyword or tapped a button, within Meta's messaging windows. AutoDM never sends bulk, promotional or unsolicited messages.`,
+  };
+
+  const recording = `Screen recording plan (about 2 minutes, English UI, add captions):
+
+1. Open the AutoDM dashboard at ${location.origin}. Show the connected account ${user} (instagram_business_basic) and the post picker in an automation.
+2. Show the automation: keyword "${kw}", public reply, DM text and button.
+3. On a second phone/account, open ${where} and comment "${kw}".
+4. Show the public reply appearing under the comment (instagram_business_manage_comments).
+5. Open the DMs on the second account and show the message with the "${r.dmButton}" button (instagram_business_manage_messages).
+6. Tap the button${r.requireFollow ? `, show the follow request, follow ${user}, tap "${r.followButton}"` : ""} and show the link arriving.
+7. Back in the dashboard, open Activity and show each step logged.
+
+Captions to add: "Comment with keyword", "Automatic public reply", "Private reply with button", "Follow check", "Link delivered".`;
+
+  return { instructions, perms, recording, user };
+}
+
+function kitItem(key, n, title, desc, body, rp) {
+  const done = Boolean(rp[key]);
+  return `<section class="card kit-item ${done ? "done" : ""} ${openKit.has(key) ? "open" : ""}" data-kit="${key}">
+    <header>
+      <span class="num">${done ? icon("check", "sm") : n}</span>
+      <div style="flex:1;min-width:0"><h3><button class="btn ghost" data-action="kit-open" data-key="${key}" style="height:auto;padding:0;color:inherit;font:inherit;font-weight:650">${esc(title)}</button></h3><p>${desc}</p></div>
+      <label class="done-toggle"><input type="checkbox" class="check" data-kit-done="${key}" ${done ? "checked" : ""}/> Done</label>
+    </header>
+    <div class="kit-body">${body}</div>
+  </section>`;
+}
+
+async function viewApproval() {
+  renderShell("approval", `<div class="page">${pageHead("Get approved", "Loading…")}<div class="card skeleton" style="height:460px"></div></div>`);
+  const [ov, { settings }] = await Promise.all([loadOverview(), api("/api/settings"), state.rules ? null : loadRules().catch(() => null)]);
+  const rp = state.reviewProgress ?? {};
+  const t = kitTexts(ov);
+  const privacyUrl = `${location.origin}/privacy`;
+  const doneCount = KIT_KEYS.filter((k) => rp[k]).length;
+  const tick = (ok, label) => `<div class="row small" style="margin-top:6px">${ok ? icon("check", "sm") : icon("clock", "sm")}<span class="${ok ? "" : "muted"}">${label}</span></div>`;
+
+  const items = [
+    kitItem("calls", 1, "Use each permission once",
+      "Meta only lets you request a permission after it has been used successfully in the last 30 days.",
+      `<p>Doing the tester test in Setup covers all three. Meta says calls can take up to 2 days to show in the dashboard.</p>
+       ${tick(ov.setup.tokenWorks, "<code>instagram_business_basic</code> — account loaded")}
+       ${tick((ov.totals.public_reply_sent || 0) > 0, "<code>instagram_business_manage_comments</code> — public reply sent")}
+       ${tick((ov.totals.dm_sent || 0) > 0, "<code>instagram_business_manage_messages</code> — DM sent")}`, rp),
+    kitItem("settings", 2, "Fill in your app settings",
+      "In Meta: App settings → Basic. App Review asks for these four things.",
+      `<h4>Privacy policy URL</h4><p class="muted small">AutoDM hosts one for you. It uses the details below.</p>${copyBox(privacyUrl)}
+       <div class="row" style="margin-top:8px"><a class="btn sm" href="/privacy" target="_blank" rel="noopener">${icon("eye", "sm")} Preview</a><span class="muted small">If Meta asks for data deletion instructions, use <code>${esc(privacyUrl)}#delete</code></span></div>
+       <form id="profile-form" class="grid" style="grid-template-columns:1fr 1fr;margin-top:14px;align-items:end">
+         <div class="field"><label class="label" for="pf-name">Your name or brand</label><input class="input" id="pf-name" name="ownerName" value="${esc(settings.ownerName)}" maxlength="100" placeholder="${esc(t.user)}"/></div>
+         <div class="field" data-wrap="contactEmail"><label class="label" for="pf-email">Contact email</label><input class="input" id="pf-email" name="contactEmail" type="email" value="${esc(settings.contactEmail)}" maxlength="200" placeholder="you@example.com"/></div>
+         <div><button class="btn sm" type="submit">${icon("check", "sm")} Save</button> <span class="err" data-err="contactEmail"></span></div>
+       </form>
+       <h4>App icon (1024 × 1024)</h4><p class="muted small">A clean black and white icon, ready to upload.</p>
+       <button class="btn sm" data-action="download-icon" style="margin-top:6px">${icon("image", "sm")} Download app icon</button>
+       <h4>App category</h4><p class="muted small">Pick the category closest to what you do.</p>
+       <h4>Business email</h4><p class="muted small">Use the same contact email. Meta sends review results there.</p>`, rp),
+    kitItem("verification", 3, "Verify your business",
+      "Meta requires Business Verification for apps that serve people without a role on the app.",
+      `<ol class="wz-list">
+         <li><b>Start</b><p>Meta app → ${kbd("App settings")} → ${kbd("Basic")} → <b>Verification</b> → ${kbd("Start Verification")}.</p></li>
+         <li><b>Check the document list first</b><p>Meta's Business Help Center lists the accepted documents. Read it before you start — it decides how long this step takes, especially for individual creators.</p><div style="margin-top:8px">${ext("https://www.facebook.com/business/help/1095661473946872", "About Business Verification")}</div></li>
+         <li><b>Wait for the result</b><p>You can prepare the other items while Meta checks.</p></li>
+       </ol>`, rp),
+    kitItem("instructions", 4, "Reviewer instructions",
+      "Meta reviewers follow these steps to test your app. Paste into “Provide verification details”.",
+      `${copyArea(t.instructions)}<p class="hint" style="margin-top:8px">Edit the last line: add a temporary dashboard password for reviewers, or delete it.</p>`, rp),
+    kitItem("permissions", 5, "Explain each permission",
+      "For each permission, Meta asks “How will your app use…”. Paste the matching text.",
+      Object.entries(t.perms).map(([p, txt]) => `<h4><code>${p}</code></h4>${copyArea(txt)}`).join(""), rp),
+    kitItem("recording", 6, "Record your screen",
+      "One short video showing the whole flow. Meta asks for English UI or captions, and clear explanations of buttons.",
+      copyArea(t.recording), rp),
+    kitItem("submit", 7, "Submit for review",
+      "Meta's guide says a decision usually comes within a week.",
+      `<ol class="wz-list">
+         <li><b>Open App Review</b><p>${kbd("Instagram")} → ${kbd("API setup with Instagram login")} → click the arrow on <b>Complete app review</b> → ${kbd("Continue to app review")} → ${kbd("Edit")}.</p></li>
+         <li><b>Request Advanced Access</b><p>For <code>instagram_business_basic</code>, <code>instagram_business_manage_comments</code> and <code>instagram_business_manage_messages</code>. Paste the texts from items 4–5 and upload the recording.</p></li>
+         <li><b>Submit</b><p>Click ${kbd("Submit for Review")} and accept the terms. If it's rejected, Meta tells you why — fix it and submit again.</p></li>
+       </ol>`, rp),
+    kitItem("live", 8, "Switch to Live",
+      "After approval, publish the app so everyone gets your DMs.",
+      `<p>In the Meta app dashboard, switch the app mode from <b>Development</b> to <b>Live</b>. Then comment from an account that is not a tester to confirm. Tick “Done” here when it works.</p>`, rp),
+  ].join("");
+
+  renderShell(
+    "approval",
+    `<div class="page" style="max-width:900px">
+    ${pageHead("Get approved by Meta", "Right now only testers get DMs. Follow these 8 items to reply to everyone. Every text, link and file Meta asks for is ready here.")}
+    <div class="timeline" style="margin-bottom:16px">
+      <div><span class="when">Today · ~1 hour</span><b>Prepare</b><span>Items 1–6 on this page</span></div>
+      <div><span class="when">Meta</span><b>Business Verification</b><span>Meta checks your documents</span></div>
+      <div><span class="when">Usually ≤ 1 week</span><b>App Review</b><span>Meta tests your app</span></div>
+      <div><span class="when">Then</span><b>Go Live</b><span>Everyone gets DMs</span></div>
+    </div>
+    <div class="wz-progress card card-pad" style="margin-bottom:16px"><div class="row"><span>${doneCount} of ${KIT_KEYS.length} done</span><span>${pct(doneCount, KIT_KEYS.length)}%</span></div><div class="progress"><div style="width:${pct(doneCount, KIT_KEYS.length)}%"></div></div></div>
+    <div class="kit">${items}</div>
+    <p class="hint" style="margin-top:16px">These texts are a starting point. Make sure they match exactly what you show in the recording. Sources: <a href="https://developers.facebook.com/documentation/instagram-platform/app-review" target="_blank" rel="noopener noreferrer">Meta's App Review guide</a>.</p>
   </div>`,
   );
+
+  $$("[data-kit-done]").forEach((cb) =>
+    cb.addEventListener("change", async () => {
+      const progress = { ...(state.reviewProgress ?? {}), [cb.dataset.kitDone]: cb.checked };
+      try {
+        state.reviewProgress = (await api("/api/review-progress", { method: "PUT", body: { progress } })).progress;
+        openKit.delete(cb.dataset.kitDone);
+        viewApproval();
+      } catch (e) {
+        cb.checked = !cb.checked;
+        reportError(e);
+      }
+    }),
+  );
+  $("#profile-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      await api("/api/settings", { method: "PUT", body: { ownerName: fd.get("ownerName"), contactEmail: fd.get("contactEmail") } });
+      $('[data-err="contactEmail"]').textContent = "";
+      toast("Saved. Your privacy page is updated.");
+    } catch (err) {
+      if (err.data?.errors?.contactEmail) $('[data-err="contactEmail"]').textContent = err.data.errors.contactEmail;
+      reportError(err);
+    }
+  });
+}
+
+/** Draws the brand mark on a 1024px canvas and downloads it as PNG (for Meta's app icon). */
+function downloadIcon() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 1024;
+  const g = c.getContext("2d");
+  g.fillStyle = "#0a0a0a";
+  g.fillRect(0, 0, 1024, 1024);
+  g.scale(32, 32);
+  g.fillStyle = "#ffffff";
+  g.fill(new Path2D(BUBBLE_PATH));
+  g.fillStyle = "#0a0a0a";
+  g.fill(new Path2D(BOLT_PATH));
+  c.toBlob((blob) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "autodm-app-icon-1024.png";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }, "image/png");
 }
 
 /* ======================= global actions ======================= */
@@ -1035,6 +1313,21 @@ const actions = {
     renderLogin();
   },
   "close-modal": () => closeModal(),
+  "wz-go": (el) => {
+    wzActive = el.dataset.step;
+    viewSetup();
+  },
+  "wz-check": async (el) => {
+    el.disabled = true;
+    await viewSetup();
+    toast("Status updated");
+  },
+  "kit-open": (el) => {
+    const k = el.dataset.key;
+    openKit.has(k) ? openKit.delete(k) : openKit.add(k);
+    $(`[data-kit="${k}"]`)?.classList.toggle("open", openKit.has(k));
+  },
+  "download-icon": () => downloadIcon(),
   copy: (el) => copyText(el.dataset.text),
   reload: () => route(),
   "reveal-vt": async (el) => {
@@ -1046,8 +1339,8 @@ const actions = {
   subscribe: async (el) => {
     el.disabled = true;
     try {
-      await api("/api/setup/subscribe", { method: "POST", body: { fields: el.dataset.fields } });
-      toast("Subscribed. New comments will now reach your dashboard.");
+      await api("/api/setup/subscribe", { method: "POST", body: {} });
+      toast("Subscribed. New comments will now reach AutoDM.");
     } catch (e) {
       reportError(e);
     } finally {
@@ -1191,6 +1484,7 @@ async function route() {
     } else if (path === "/activity") await viewActivity(params);
     else if (path === "/settings") await viewSettings();
     else if (path === "/setup") await viewSetup();
+    else if (path === "/approval") await viewApproval();
     else location.hash = "#/";
   } catch (e) {
     reportError(e);
@@ -1220,6 +1514,16 @@ async function boot() {
     return; // login / no-password screen already rendered
   }
   if (!state.rules) loadRules().catch(() => {});
+  // First visit after login: if the basics aren't connected yet, open the setup wizard instead of empty charts.
+  if (!location.hash || location.hash === "#/") {
+    try {
+      const ov = await loadOverview();
+      if (setupSteps(ov).slice(0, 4).some((s) => !s.done)) {
+        history.replaceState(null, "", "#/setup");
+        lastHash = "#/setup";
+      }
+    } catch {}
+  }
   route();
 }
 

@@ -112,7 +112,11 @@ describe("dashboard input validation", () => {
       cooldownDays: 3,
       onFollowCheckError: "ask_follow",
       fallbackHint: "Reply YES to get the link.",
+      ownerName: "",
+      contactEmail: "",
     });
+    expect(parseSettingsInput({ cooldownDays: 3, contactEmail: "not-an-email" }).errors.contactEmail).toBeDefined();
+    expect(parseSettingsInput({ cooldownDays: 3, contactEmail: "me@example.com" }).settings?.contactEmail).toBe("me@example.com");
     expect(parseSettingsInput({ cooldownDays: -1 }).errors.cooldownDays).toBeDefined();
     expect(parseSettingsInput({ cooldownDays: 1.5 }).errors.cooldownDays).toBeDefined();
   });

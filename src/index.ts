@@ -1,6 +1,7 @@
 import { handleApi } from "./api";
 import { handleWebhook, jsonLog } from "./flow";
 import { InstagramClient } from "./instagram";
+import { privacyHtml } from "./privacy";
 import { verifySignature } from "./signature";
 import { Store } from "./store";
 import { currentToken, maybeRefreshToken } from "./token";
@@ -60,6 +61,19 @@ async function webhook(request: Request, env: Env, ctx: ExecutionContext, store:
   return new Response("EVENT_RECEIVED", { status: 200 });
 }
 
+/** Public privacy policy (Meta App Review needs a URL for one). */
+export async function privacyPage(store: Store): Promise<Response> {
+  const [settings, username] = await Promise.all([store.getSettings(), store.getValue("account_username")]);
+  return new Response(privacyHtml({ ownerName: settings.ownerName, contactEmail: settings.contactEmail, username }), {
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": "public, max-age=60",
+    },
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -67,6 +81,7 @@ export default {
     await store.init();
 
     if (url.pathname === "/webhook") return webhook(request, env, ctx, store);
+    if (url.pathname === "/privacy") return privacyPage(store);
     if (url.pathname.startsWith("/api/")) return handleApi(request, { env, store });
     // Everything else is the dashboard, served from ./public by Workers static assets.
     return new Response("Not found", { status: 404 });

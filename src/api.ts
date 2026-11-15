@@ -83,6 +83,7 @@ export async function handleApi(request: Request, ctx: ApiContext): Promise<Resp
       let accountError: string | null = null;
       try {
         account = await (await client()).getAccount();
+        if (account.username) await store.setValue("account_username", account.username); // for the /privacy page
       } catch (e) {
         accountError = errText(e);
       }
@@ -171,10 +172,24 @@ export async function handleApi(request: Request, ctx: ApiContext): Promise<Resp
       return json({ settings: await store.getSettings(), token: { source: t.source, refreshedAt: t.refreshedAt } });
     }
     if (path === "/api/settings" && method === "PUT") {
-      const { settings, errors } = parseSettingsInput(await readJson(request));
+      // Partial updates are fine: fields that are not sent keep their current value.
+      const { settings, errors } = parseSettingsInput({ ...(await store.getSettings()), ...(await readJson(request)) });
       if (!settings) return json({ error: "Please fix the highlighted fields.", errors }, 422);
       await store.saveSettings(settings);
       return json({ settings });
+    }
+
+    if (path === "/api/review-progress" && method === "GET") {
+      return json({ progress: JSON.parse((await store.getValue("review_progress")) ?? "{}") });
+    }
+    if (path === "/api/review-progress" && method === "PUT") {
+      const body = await readJson(request);
+      const progress: Record<string, boolean> = {};
+      for (const [k, v] of Object.entries(body?.progress ?? {}).slice(0, 30)) {
+        if (/^[a-z_]{1,30}$/.test(k)) progress[k] = Boolean(v);
+      }
+      await store.setValue("review_progress", JSON.stringify(progress));
+      return json({ progress });
     }
 
     if (path === "/api/token/refresh" && method === "POST") {

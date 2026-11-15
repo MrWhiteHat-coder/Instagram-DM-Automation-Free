@@ -5,7 +5,9 @@ Someone comments a keyword like **`REPO`** on your reel → they get a DM with a
 - **Free and open source** (MIT). Runs on your own Cloudflare account; the free plan is enough for most creators.
 - **Your data stays with you.** No third-party service sits between you and Instagram.
 - **Official Meta API only.** No password sharing, no browser bots, no scraping.
-- **Premium dashboard**: automations with a live phone preview, post picker, keyword tester, 14-day analytics and conversion funnel, activity log, dark/light mode, mobile friendly.
+- **Minimal black & white dashboard**: automations with a live phone preview, post picker, keyword tester, 14-day analytics and conversion funnel, activity log, dark/light mode, mobile friendly.
+- **Guided setup**: after you deploy, the dashboard walks you through six steps and ticks each one off by itself.
+- **Approval kit**: everything Meta's App Review asks for, ready to copy — reviewer instructions, permission descriptions, screen-recording plan, a hosted privacy policy page and a 1024×1024 app icon.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/YOUR_GITHUB_USERNAME/ig-comment-dm)
 
@@ -40,6 +42,8 @@ Built with a Cloudflare Worker, D1 (SQLite) and static assets. No build step for
 ---
 
 ## Setup (about 20 minutes)
+
+**Short version:** deploy (step 2 below), open your AutoDM URL, sign in — the **Setup** page guides you through the rest with copy buttons and live checks. The steps below are the same thing in text form.
 
 You need: an Instagram **Professional** account (Business or Creator) that is **public**, a free [Cloudflare](https://dash.cloudflare.com/sign-up) account and a [Meta developer](https://developers.facebook.com/) account.
 
@@ -107,6 +111,8 @@ If nothing shows in Activity, Meta did not deliver the webhook. Check the subscr
 
 ## Going public
 
+Open **Get approved** in the dashboard: it has an 8-item checklist with every text pre-written from your own automation, your privacy policy URL (`/privacy`, filled with the name and email you enter), and an app icon download. Summary:
+
 Meta's docs say comment webhooks for people without a role on your app need **Advanced Access**, a **Live** app and **Business Verification**.
 
 1. **Business Verification** — Meta App Dashboard → App settings → Basic → Verification. Meta's Business Help Center lists the documents.
@@ -147,7 +153,8 @@ npm run typecheck
 Project layout:
 
 ```
-src/index.ts      routes: /webhook, /api/*, daily cron
+src/index.ts      routes: /webhook, /privacy, /api/*, daily cron
+src/privacy.ts    public privacy policy page for App Review
 src/flow.ts       comment → DM → follow check → link
 src/instagram.ts  Meta API calls
 src/store.ts      D1 tables (created automatically)
