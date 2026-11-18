@@ -135,6 +135,33 @@ describe("comment -> private reply", () => {
   });
 });
 
+describe("explains ignored comments in Activity", () => {
+  it("says why the owner's own keyword comment did nothing", async () => {
+    await setup();
+    await handleWebhook(commentEvent("c1", "REPO test", IG_ID), deps);
+    const [e] = await store.listEvents(1);
+    expect(e.type).toBe("comment_ignored");
+    expect(e.detail).toContain("second account");
+    expect(api.calls).toHaveLength(0);
+  });
+
+  it("does not log our own non-keyword replies", async () => {
+    await setup();
+    await handleWebhook(commentEvent("c1", "Check your DM", IG_ID), deps);
+    expect(await store.listEvents(5)).toHaveLength(0);
+  });
+
+  it("logs comments without a keyword and keyword comments on another post", async () => {
+    await setup({}, makeRule({ mediaId: "999" }));
+    await handleWebhook(commentEvent("c1", "nice video"), deps);
+    await handleWebhook(commentEvent("c2", "REPO pls"), deps); // event media is 111, rule is for 999
+    const events = await store.listEvents(5);
+    expect(events.map((e) => e.type)).toEqual(["comment_ignored", "comment_ignored"]);
+    expect(events[0].detail).toContain("different post");
+    expect(events[1].detail).toContain("No automation keyword");
+  });
+});
+
 describe("button tap -> follow check -> link", () => {
   it("sends the link to a follower", async () => {
     await setup({ follows: true });

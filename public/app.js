@@ -181,6 +181,7 @@ const EVENT_META = {
   follow_requested: { label: "Asked to follow", tone: "amber", icon: "userPlus" },
   link_sent: { label: "Link delivered", tone: "green", icon: "link" },
   skipped_cooldown: { label: "Skipped · cooldown", tone: "slate", icon: "clock" },
+  comment_ignored: { label: "Comment ignored", tone: "slate", icon: "comment" },
   dm_failed: { label: "DM failed", tone: "red", icon: "alert" },
   public_reply_failed: { label: "Reply failed", tone: "red", icon: "alert" },
   follow_check_failed: { label: "Follow check failed", tone: "red", icon: "alert" },
@@ -883,7 +884,7 @@ const FILTERS = {
   flow: { label: "Conversations", match: (t) => ["comment_matched", "dm_sent", "button_tap", "link_sent", "follow_requested", "public_reply_sent"].includes(t) },
   links: { label: "Links delivered", match: (t) => t === "link_sent" },
   problems: { label: "Problems", match: (t) => t.endsWith("_failed") || t === "error" },
-  skipped: { label: "Skipped", match: (t) => t.startsWith("skipped") },
+  skipped: { label: "Skipped / ignored", match: (t) => t.startsWith("skipped") || t === "comment_ignored" },
 };
 
 async function viewActivity(params) {
@@ -1050,7 +1051,9 @@ function wizardContent(id, ov) {
           </ol>
           ${s.lastWebhookAt
             ? `<div class="status-line ok">${icon("check")} Receiving events · last one ${timeAgo(s.lastWebhookAt)}</div>`
-            : `<div class="status-line">${icon("clock")} Waiting for the first event. Tip: press ${kbd("Test")} next to <code>comments</code> in Meta, then “Check again”.</div>`}`,
+            : s.lastWebhookAttemptAt
+              ? `<div class="status-line bad">${icon("alert")} Meta is sending events (${timeAgo(s.lastWebhookAttemptAt)}) but AutoDM rejects them: <code>META_APP_SECRET</code> doesn't match. Use the App secret from Meta → App settings → Basic.</div>`
+              : `<div class="status-line">${icon("clock")} Waiting for the first event. Tip: press ${kbd("Test")} next to <code>comments</code> in Meta, then “Check again”.</div>`}`,
       };
     case "automation":
       return {
@@ -1529,16 +1532,15 @@ async function boot() {
     return; // login / no-password screen already rendered
   }
   if (!state.rules) loadRules().catch(() => {});
-  // First visit after login: if the basics aren't connected yet, open the setup wizard instead of empty charts.
-  if (!location.hash || location.hash === "#/") {
-    try {
-      const ov = await loadOverview();
-      if (setupSteps(ov).slice(0, 4).some((s) => !s.done)) {
-        history.replaceState(null, "", "#/setup");
-        lastHash = "#/setup";
-      }
-    } catch {}
-  }
+  try {
+    // Loads the account for the sidebar on every page.
+    const ov = await loadOverview();
+    // First visit after login: if the basics aren't connected yet, open the setup wizard instead of empty charts.
+    if ((!location.hash || location.hash === "#/") && setupSteps(ov).slice(0, 4).some((s) => !s.done)) {
+      history.replaceState(null, "", "#/setup");
+      lastHash = "#/setup";
+    }
+  } catch {}
   route();
 }
 

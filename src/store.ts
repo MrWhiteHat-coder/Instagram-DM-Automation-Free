@@ -29,6 +29,7 @@ export type EventType =
   | "public_reply_sent"
   | "public_reply_failed"
   | "skipped_cooldown"
+  | "comment_ignored"
   | "button_tap"
   | "link_sent"
   | "follow_requested"

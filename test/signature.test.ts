@@ -57,3 +57,33 @@ describe("verification handshake", () => {
     expect(verificationResponse(url("hub.mode=subscribe&hub.challenge=1&hub.verify_token="), undefined).status).toBe(403);
   });
 });
+
+describe("webhook endpoint", () => {
+  it("rejects a badly signed POST and explains it once in Activity", async () => {
+    const { default: worker } = await import("../src/index");
+    const { fakeD1 } = await import("./fakeD1");
+    const { Store } = await import("../src/store");
+    const db = fakeD1();
+    const env: any = { DB: db, META_APP_SECRET: "right-secret", IG_ACCESS_TOKEN: "EAAx", WEBHOOK_VERIFY_TOKEN: "vt", GRAPH_API_VERSION: "v27.0" };
+    const pending: Promise<unknown>[] = [];
+    const ctx: any = { waitUntil: (p: Promise<unknown>) => pending.push(p), passThroughOnException() {} };
+    const post = async () => {
+      const b = JSON.stringify({ object: "instagram", entry: [] });
+      const res = await worker.fetch(
+        new Request("https://autodm.test/webhook", { method: "POST", body: b, headers: { "X-Hub-Signature-256": await sign(b, "wrong-secret") } }) as any,
+        env,
+        ctx,
+      );
+      await Promise.all(pending);
+      return res;
+    };
+    expect((await post()).status).toBe(401);
+    expect((await post()).status).toBe(401);
+    const store = new Store(db);
+    const events = await store.listEvents(10);
+    expect(events).toHaveLength(1); // throttled
+    expect(events[0].detail).toContain("META_APP_SECRET");
+    expect(await store.getValue("last_webhook_attempt_at")).not.toBeNull();
+    expect(await store.getValue("last_webhook_at")).toBeNull();
+  });
+});

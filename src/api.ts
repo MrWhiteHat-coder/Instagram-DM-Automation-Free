@@ -105,6 +105,7 @@ export async function handleApi(request: Request, ctx: ApiContext): Promise<Resp
           tokenSource: token.source,
           tokenRefreshedAt: token.refreshedAt,
           lastWebhookAt: lastWebhook ? Number(lastWebhook) : null,
+          lastWebhookAttemptAt: Number((await store.getValue("last_webhook_attempt_at")) ?? 0) || null,
           rules: rules.length,
           activeRules: rules.filter((r) => r.enabled).length,
           webhookUrl: `${url.origin}/webhook`,

@@ -1,5 +1,5 @@
 import { InstagramClient, buttonMessage, textMessage } from "./instagram";
-import { findRule, linkPlainText, type Rule, type Settings } from "./rules";
+import { findRule, linkPlainText, ruleMatches, type Rule, type Settings } from "./rules";
 import type { Store } from "./store";
 
 export interface Deps {
@@ -58,11 +58,35 @@ export async function handleComment(igId: string, value: any, deps: Deps): Promi
   const mediaId: string | undefined = value?.media?.id;
   if (!commentId || !userId) return jsonLog("comment_skipped", { reason: "missing_ids" });
 
-  // Our own public reply also arrives as a comment event. Never answer ourselves.
-  if (userId === igId) return jsonLog("comment_skipped", { reason: "own_comment", commentId });
+  const rules = await store.listRules();
 
-  const rule = findRule(await store.listRules(), mediaId, text);
-  if (!rule) return jsonLog("comment_skipped", { reason: "no_keyword_match", commentId, mediaId });
+  // Our own public reply also arrives as a comment event. Never answer ourselves.
+  if (userId === igId) {
+    jsonLog("comment_skipped", { reason: "own_comment", commentId });
+    // If the owner tested with their own account, say why nothing happened.
+    if (rules.some((r) => r.enabled && ruleMatches(r, text))) {
+      await store.logEvent("comment_ignored", {
+        userId,
+        username,
+        detail: `Your own comment "${text.slice(0, 80)}" was ignored. Test from a second account added as Instagram Tester.`,
+      });
+    }
+    return;
+  }
+
+  const rule = findRule(rules, mediaId, text);
+  if (!rule) {
+    jsonLog("comment_skipped", { reason: "no_keyword_match", commentId, mediaId });
+    const onOtherPost = rules.find((r) => r.enabled && r.mediaId !== "any" && r.mediaId !== mediaId && ruleMatches(r, text));
+    await store.logEvent("comment_ignored", {
+      userId,
+      username,
+      detail: onOtherPost
+        ? `Keyword matched "${onOtherPost.name}", but that automation only runs on a different post.`
+        : `No automation keyword in: "${text.slice(0, 80)}"`,
+    });
+    return;
+  }
 
   if (!(await store.claim(`comment:${commentId}`, 8 * DAY))) {
     return jsonLog("comment_skipped", { reason: "duplicate_comment", commentId });

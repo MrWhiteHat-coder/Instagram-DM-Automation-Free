@@ -40,8 +40,20 @@ async function webhook(request: Request, env: Env, ctx: ExecutionContext, store:
   }
 
   const rawBody = await request.text();
+  ctx.waitUntil(store.setValue("last_webhook_attempt_at", String(Date.now())).catch(() => {}));
   if (!(await verifySignature(rawBody, request.headers.get("X-Hub-Signature-256"), env.META_APP_SECRET))) {
     jsonLog("rejected", { reason: "bad_signature" });
+    // Show it in the dashboard (at most every 10 minutes): the usual cause is the wrong secret.
+    ctx.waitUntil(
+      (async () => {
+        if (await store.claim("diag:bad_signature", 600)) {
+          await store.logEvent("error", {
+            detail:
+              "Meta sent a webhook but its signature didn't match META_APP_SECRET. Use the App secret from Meta → App settings → Basic (Unified login), then redeploy.",
+          });
+        }
+      })().catch(() => {}),
+    );
     return new Response("Invalid signature", { status: 401 });
   }
 
