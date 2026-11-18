@@ -1,5 +1,8 @@
 /**
- * Thin client for the Instagram API with Instagram Login (host graph.instagram.com).
+ * Thin client for Meta's Instagram API. Supports both setups Meta offers for this:
+ * - "unified":   Instagram API with Unified Login (default for new Meta apps), graph.facebook.com,
+ *                Business Integration System User token, calls use the Instagram account ID.
+ * - "instagram": Instagram API with Instagram Login, graph.instagram.com, Instagram User token, /me paths.
  * Endpoints and payload shapes follow Meta's docs, listed in docs/META_DOCS.md.
  */
 export class InstagramApiError extends Error {
@@ -15,6 +18,17 @@ function summarize(body: any): string {
 }
 
 export type Button = { type: "postback"; title: string; payload: string } | { type: "web_url"; title: string; url: string };
+
+export type ApiMode = "unified" | "instagram";
+
+/**
+ * Instagram Login tokens start with "IG"; Unified/Facebook Login tokens start with "EAA".
+ * IG_API_MODE ("unified" | "instagram") overrides the guess.
+ */
+export function detectApiMode(token: string, override?: string | null): ApiMode {
+  if (override === "unified" || override === "instagram") return override;
+  return token.startsWith("IG") ? "instagram" : "unified";
+}
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -38,13 +52,30 @@ export interface Media {
 
 export class InstagramClient {
   private base: string;
+  private ownIgId: string | null = null;
 
   constructor(
     private accessToken: string,
     apiVersion: string,
     private fetchImpl: FetchLike = (input, init) => fetch(input, init),
+    readonly mode: ApiMode = "instagram",
   ) {
-    this.base = `https://graph.instagram.com/${apiVersion}`;
+    this.base = `https://${mode === "unified" ? "graph.facebook.com" : "graph.instagram.com"}/${apiVersion}`;
+  }
+
+  /**
+   * Path prefix for "my account". Instagram Login: /me. Unified Login: /me is the system user,
+   * so we look up the shared Instagram account via /me/assigned_instagram_accounts.
+   */
+  private async accountPath(): Promise<string> {
+    if (this.mode === "instagram") return "/me";
+    if (!this.ownIgId) {
+      const b = await this.call("assignedInstagramAccounts", "/me/assigned_instagram_accounts?fields=id,username");
+      const first = b?.data?.[0];
+      if (!first?.id) throw new InstagramApiError(200, b, "assignedInstagramAccounts (no Instagram account shared with this token)");
+      this.ownIgId = String(first.id);
+    }
+    return `/${this.ownIgId}`;
   }
 
   private async call(where: string, path: string, init: RequestInit = {}): Promise<any> {
@@ -93,9 +124,11 @@ export class InstagramClient {
     return body.is_user_follow_business;
   }
 
-  /** GET /me — the connected professional account. */
+  /** The connected professional account. */
   async getAccount(): Promise<Account> {
-    const b = await this.call("getAccount", "/me?fields=user_id,username,profile_picture_url,followers_count,media_count");
+    const acc = await this.accountPath();
+    const fields = this.mode === "unified" ? "id,username,profile_picture_url,followers_count,media_count" : "user_id,username,profile_picture_url,followers_count,media_count";
+    const b = await this.call("getAccount", `${acc}?fields=${fields}`);
     return {
       userId: String(b.user_id ?? b.id ?? ""),
       username: b.username ?? "",
@@ -105,16 +138,18 @@ export class InstagramClient {
     };
   }
 
-  /** POST /me/subscribed_apps — turns on webhook notifications for this account. */
+  /** POST /<account>/subscribed_apps — turns on webhook notifications for this account. */
   async subscribeApp(fields: string): Promise<boolean> {
-    const b = await this.call("subscribeApp", `/me/subscribed_apps?subscribed_fields=${encodeURIComponent(fields)}`, { method: "POST" });
+    const acc = await this.accountPath();
+    const b = await this.call("subscribeApp", `${acc}/subscribed_apps?subscribed_fields=${encodeURIComponent(fields)}`, { method: "POST" });
     return b?.success === true;
   }
 
-  /** GET /me/media — recent posts and reels, for the post picker. */
+  /** GET /<account>/media — recent posts and reels, for the post picker. */
   async listMedia(limit = 30): Promise<Media[]> {
+    const acc = await this.accountPath();
     const fields = "id,caption,media_type,media_product_type,media_url,thumbnail_url,permalink,timestamp";
-    const b = await this.call("listMedia", `/me/media?fields=${fields}&limit=${limit}`);
+    const b = await this.call("listMedia", `${acc}/media?fields=${fields}&limit=${limit}`);
     return (b?.data ?? []).map((m: any) => ({
       id: String(m.id),
       caption: m.caption ?? "",

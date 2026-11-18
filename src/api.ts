@@ -1,5 +1,5 @@
 import { createSession, passwordMatches, readCookie, SESSION_COOKIE, sessionCookie, verifySession } from "./auth";
-import { InstagramClient } from "./instagram";
+import { detectApiMode, InstagramClient } from "./instagram";
 import { findRule, parseRuleInput, parseSettingsInput } from "./rules";
 import type { Store } from "./store";
 import { currentToken, maybeRefreshToken } from "./token";
@@ -10,6 +10,7 @@ export interface ApiEnv {
   IG_ACCESS_TOKEN?: string;
   WEBHOOK_VERIFY_TOKEN?: string;
   ADMIN_PASSWORD?: string;
+  IG_API_MODE?: string;
 }
 
 export interface ApiContext {
@@ -65,7 +66,9 @@ export async function handleApi(request: Request, ctx: ApiContext): Promise<Resp
   const client = async () => {
     const t = await currentToken(store, env.IG_ACCESS_TOKEN);
     if (!t.token) throw new Error("IG_ACCESS_TOKEN is not set");
-    return ctx.makeClient ? ctx.makeClient(t.token) : new InstagramClient(t.token, env.GRAPH_API_VERSION || "v27.0");
+    return ctx.makeClient
+      ? ctx.makeClient(t.token)
+      : new InstagramClient(t.token, env.GRAPH_API_VERSION || "v27.0", undefined, detectApiMode(t.token, env.IG_API_MODE));
   };
 
   try {
@@ -105,6 +108,8 @@ export async function handleApi(request: Request, ctx: ApiContext): Promise<Resp
           rules: rules.length,
           activeRules: rules.filter((r) => r.enabled).length,
           webhookUrl: `${url.origin}/webhook`,
+          redirectUrl: `${url.origin}/auth/callback`,
+          apiMode: detectApiMode(token.token, env.IG_API_MODE),
         },
       });
     }
@@ -169,7 +174,10 @@ export async function handleApi(request: Request, ctx: ApiContext): Promise<Resp
 
     if (path === "/api/settings" && method === "GET") {
       const t = await currentToken(store, env.IG_ACCESS_TOKEN);
-      return json({ settings: await store.getSettings(), token: { source: t.source, refreshedAt: t.refreshedAt } });
+      return json({
+        settings: await store.getSettings(),
+        token: { source: t.source, refreshedAt: t.refreshedAt, mode: detectApiMode(t.token, env.IG_API_MODE) },
+      });
     }
     if (path === "/api/settings" && method === "PUT") {
       // Partial updates are fine: fields that are not sent keep their current value.
@@ -193,7 +201,7 @@ export async function handleApi(request: Request, ctx: ApiContext): Promise<Resp
     }
 
     if (path === "/api/token/refresh" && method === "POST") {
-      const r = await maybeRefreshToken(store, env.IG_ACCESS_TOKEN, { force: true });
+      const r = await maybeRefreshToken(store, env.IG_ACCESS_TOKEN, { force: true, modeOverride: env.IG_API_MODE });
       return json(r);
     }
 

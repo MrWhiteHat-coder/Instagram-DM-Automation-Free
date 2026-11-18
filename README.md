@@ -24,7 +24,7 @@ Someone comments a keyword like **`REPO`** on your reel → they get a DM with a
 | **Overview** | Comments matched, DMs sent, button taps, links delivered, daily chart, funnel, setup checklist |
 | **Activity** | Every step with the person's username, filter by conversations / links / problems |
 | **Safety** | Never DMs the same person twice for one automation (cooldown you choose) · ignores Meta's duplicate deliveries · checks Meta's signature on every webhook · password-protected dashboard with login rate limiting |
-| **Maintenance** | Access token refreshed automatically every week (Instagram tokens expire after 60 days) · old activity cleaned after 90 days |
+| **Maintenance** | Works with both Meta setups (Unified login and Instagram login, detected from the token) · Instagram-login tokens refreshed automatically every week · old activity cleaned after 90 days |
 
 ## How it works
 
@@ -47,26 +47,16 @@ Built with a Cloudflare Worker, D1 (SQLite) and static assets. No build step for
 
 You need: an Instagram **Professional** account (Business or Creator) that is **public**, a free [Cloudflare](https://dash.cloudflare.com/sign-up) account and a [Meta developer](https://developers.facebook.com/) account.
 
-### 1. Create the Meta app
+### 1. Deploy AutoDM first
 
-1. Open <https://developers.facebook.com/apps> → **Create app**.
-2. Use case **Other** → app type **Business** → name and contact email.
-3. Find the **Instagram** product → **Set up** → it adds **API setup with Instagram login**. Use this one.
-4. Under "Generate access tokens", **Add account** and log in with your Instagram account.
-5. Click **Generate token** and allow these permissions:
-   - `instagram_business_basic`
-   - `instagram_business_manage_comments`
-   - `instagram_business_manage_messages`
-6. Copy the **token** and the **Instagram app secret** shown on that page. Keep them private.
-
-### 2. Deploy AutoDM
+You don't have the Meta values yet, so deploy with `temp` for `META_APP_SECRET` and `IG_ACCESS_TOKEN` and replace them in step 2. Make sure every value is saved as type **Secret** in Cloudflare (Settings → Variables and Secrets), not as a plain variable.
 
 **Option A — one click.** Press the **Deploy to Cloudflare** button above. Cloudflare copies this repo to your GitHub, creates the database and asks for four secrets:
 
 | Secret | Value |
 | --- | --- |
-| `META_APP_SECRET` | Instagram app secret from step 1 |
-| `IG_ACCESS_TOKEN` | Token from step 1 |
+| `META_APP_SECRET` | `temp` for now → later the **App secret** from Meta (App settings → Basic) |
+| `IG_ACCESS_TOKEN` | `temp` for now → later the token from step 2 |
 | `WEBHOOK_VERIFY_TOKEN` | Any random text you invent (you'll paste it into Meta) |
 | `ADMIN_PASSWORD` | Password for your dashboard. Make it long. |
 
@@ -88,11 +78,30 @@ The first `wrangler secret put` may ask to create the Worker; say yes. `npm run 
 
 You get a URL like `https://ig-comment-dm.<you>.workers.dev`. Open it and sign in with your `ADMIN_PASSWORD`. A custom domain can be added in Cloudflare → Workers & Pages → your worker → Settings → Domains & Routes.
 
+### 2. Create the Meta app and connect Instagram
+
+The dashboard's **Setup** page walks you through this with copy buttons. Meta now gives new apps **Unified login** — AutoDM uses that by default.
+
+1. Open <https://developers.facebook.com/apps> → **Create app** → use case **Other** → type **Business** → name and email.
+2. Find **Instagram** → **Set up**. In the left menu open **Instagram → API setup with Unified login**.
+3. **Configure your app** → **Create new configuration** (→ *Use this configuration* if asked).
+4. **Redirect URL**: paste `https://<your-autodm-url>/auth/callback` → **Save** (required by Meta, not used by AutoDM).
+5. **Generate access tokens** → **Add account** → your Instagram. Accept the tester invite on instagram.com → Settings → Website permissions → Apps and websites → Tester invites.
+6. Click **Generate token**, log in, allow everything, and **copy the token immediately** (Meta shows it once). Put it in `IG_ACCESS_TOKEN`.
+7. **App settings → Basic → App secret → Show** → put it in `META_APP_SECRET`.
+
+Unified login needs `instagram_basic`, `instagram_manage_comments` and `instagram_manage_messages`. The default configuration also lists ads and publishing permissions; AutoDM doesn't use them, so don't request them in App Review.
+
+<details><summary>Your app shows "API setup with Instagram login" instead?</summary>
+
+That older setup works too. On that page: **Add account** → **Generate token** (permissions `instagram_business_basic`, `instagram_business_manage_comments`, `instagram_business_manage_messages`), and use the **Instagram app secret** shown there as `META_APP_SECRET`. AutoDM detects which setup you use from the token (Instagram-login tokens start with `IG`). To force it, add a plain variable `IG_API_MODE` = `instagram` or `unified`.
+</details>
+
 ### 3. Connect the webhook
 
 Open **Setup** in the dashboard. It shows your callback URL and verify token with copy buttons.
 
-1. In Meta: **Instagram → API setup with Instagram login → Configure webhooks**.
+1. In Meta, on the same **API setup** page, open **Configure webhooks**.
 2. Paste the **Callback URL** and **Verify token**, press **Verify and save**.
 3. Subscribe to `comments`, `messages` and `messaging_postbacks`.
 4. Back in the dashboard press **Subscribe my account** (this turns on notifications for your Instagram account).
@@ -116,7 +125,7 @@ Open **Get approved** in the dashboard: it has an 8-item checklist with every te
 Meta's docs say comment webhooks for people without a role on your app need **Advanced Access**, a **Live** app and **Business Verification**.
 
 1. **Business Verification** — Meta App Dashboard → App settings → Basic → Verification. Meta's Business Help Center lists the documents.
-2. **App Review** — Instagram → API setup with Instagram login → *Complete app review*. Request Advanced Access for the three permissions. For each: describe the use and upload a screen recording of this flow (English UI or captions). You need at least one successful API call per permission in the last 30 days (your tester test does this; Meta says it can take up to 2 days to register). Also needed: app icon (1024×1024), privacy policy URL, app category.
+2. **App Review** — request Advanced Access for the three permissions AutoDM uses (Unified login: `instagram_basic`, `instagram_manage_comments`, `instagram_manage_messages`). For each: describe the use and upload a screen recording of this flow (English UI or captions). You need at least one successful API call per permission in the last 30 days (your tester test does this; Meta says it can take up to 2 days to register). Also needed: app icon (1024×1024), privacy policy URL, app category.
 3. Meta's submission guide says a decision usually comes **within a week**. Rejections happen; fix and resubmit.
 4. Switch the app to **Live**.
 
@@ -166,7 +175,7 @@ test/             vitest tests
 
 ## Security
 
-- Secrets live only in Cloudflare secrets, never in the repo or the database (except the auto-refreshed access token, stored in your own D1).
+- Secrets live only in Cloudflare secrets, never in the repo or the database (except an auto-refreshed Instagram-login token, stored in your own D1).
 - Webhooks are checked with Meta's `X-Hub-Signature-256` signature.
 - Dashboard sessions are signed `HttpOnly`, `Secure`, `SameSite=Strict` cookies; writes require JSON; 10 login attempts per 15 minutes per IP.
 - Found a problem? Please open an issue without posting tokens or secrets.

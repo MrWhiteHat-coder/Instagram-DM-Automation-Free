@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { handleApi, type ApiContext } from "../src/api";
 import { createSession, verifySession } from "../src/auth";
+import { detectApiMode, InstagramClient } from "../src/instagram";
 import { currentToken, maybeRefreshToken } from "../src/token";
 import { fakeApi, makeRule, makeStore } from "./helpers";
 
@@ -122,16 +123,61 @@ describe("access token refresh", () => {
   it("stores the refreshed token, keeps it fresh, and lets a new secret win", async () => {
     const store = await makeStore();
     const ig = fakeApi();
-    expect((await currentToken(store, "secret-1")).source).toBe("secret");
+    expect((await currentToken(store, "IGsecret-1")).source).toBe("secret");
 
-    const r = await maybeRefreshToken(store, "secret-1", { fetchImpl: ig.fetchImpl, now: 1000 });
+    const r = await maybeRefreshToken(store, "IGsecret-1", { fetchImpl: ig.fetchImpl, now: 1000 });
     expect(r.refreshed).toBe(true);
     expect(ig.calls[0].path).toContain("grant_type=ig_refresh_token");
-    expect(await currentToken(store, "secret-1")).toMatchObject({ token: "refreshed-token", source: "refreshed", refreshedAt: 1000 });
+    expect(await currentToken(store, "IGsecret-1")).toMatchObject({ token: "IGrefreshed-token", source: "refreshed", refreshedAt: 1000 });
 
-    expect((await maybeRefreshToken(store, "secret-1", { fetchImpl: ig.fetchImpl, now: 2000 })).refreshed).toBe(false);
+    expect(await maybeRefreshToken(store, "IGsecret-1", { fetchImpl: ig.fetchImpl, now: 2000 })).toEqual({ refreshed: false, reason: "token is still fresh" });
 
     // The owner pasted a brand new token into the secret: use it, not the old refreshed copy.
-    expect(await currentToken(store, "secret-2")).toMatchObject({ token: "secret-2", source: "secret" });
+    expect(await currentToken(store, "IGsecret-2")).toMatchObject({ token: "IGsecret-2", source: "secret" });
+  });
+
+  it("never tries to refresh a Unified login token", async () => {
+    const store = await makeStore();
+    const ig = fakeApi();
+    const r = await maybeRefreshToken(store, "EAAunified-token", { fetchImpl: ig.fetchImpl, force: true });
+    expect(r.refreshed).toBe(false);
+    expect(ig.calls).toHaveLength(0);
+  });
+});
+
+describe("Unified login vs Instagram login", () => {
+  it("detects the setup from the token, with an override", () => {
+    expect(detectApiMode("IGAAabc")).toBe("instagram");
+    expect(detectApiMode("EAAabc")).toBe("unified");
+    expect(detectApiMode("EAAabc", "instagram")).toBe("instagram");
+    expect(detectApiMode("IGAAabc", "nonsense")).toBe("instagram");
+  });
+
+  it("uses graph.facebook.com and the Instagram account ID in Unified mode", async () => {
+    const ig = fakeApi();
+    const client = new InstagramClient("EAAtoken", "v27.0", ig.fetchImpl, "unified");
+    const account = await client.getAccount();
+    expect(account).toMatchObject({ userId: "17841400000000000", username: "creator", followers: 1200 });
+    await client.listMedia(5);
+    await client.subscribeApp("comments,messages,messaging_postbacks");
+    await client.privateReply("17841400000000000", "c1", { text: "hi" });
+    expect(ig.calls.every((c) => c.host === "graph.facebook.com")).toBe(true);
+    expect(ig.calls.map((c) => `${c.method} ${c.path.split("?")[0]}`)).toEqual([
+      "GET /me/assigned_instagram_accounts",
+      "GET /17841400000000000",
+      "GET /17841400000000000/media", // account ID looked up once and reused
+      "POST /17841400000000000/subscribed_apps",
+      "POST /17841400000000000/messages",
+    ]);
+  });
+
+  it("keeps graph.instagram.com and /me paths in Instagram login mode", async () => {
+    const ig = fakeApi();
+    const client = new InstagramClient("IGtoken", "v27.0", ig.fetchImpl, "instagram");
+    await client.getAccount();
+    await client.listMedia(5);
+    await client.subscribeApp("comments");
+    expect(ig.calls.every((c) => c.host === "graph.instagram.com")).toBe(true);
+    expect(ig.calls.map((c) => c.path.split("?")[0])).toEqual(["/me", "/me/media", "/me/subscribed_apps"]);
   });
 });

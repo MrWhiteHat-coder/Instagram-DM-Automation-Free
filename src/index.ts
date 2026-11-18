@@ -1,6 +1,6 @@
 import { handleApi } from "./api";
 import { handleWebhook, jsonLog } from "./flow";
-import { InstagramClient } from "./instagram";
+import { detectApiMode, InstagramClient } from "./instagram";
 import { privacyHtml } from "./privacy";
 import { verifySignature } from "./signature";
 import { Store } from "./store";
@@ -14,6 +14,8 @@ export interface Env {
   IG_ACCESS_TOKEN: string;
   WEBHOOK_VERIFY_TOKEN: string;
   ADMIN_PASSWORD: string;
+  /** Optional: "unified" or "instagram". Normally detected from the token. */
+  IG_API_MODE?: string;
 }
 
 /** Meta's verification handshake: echo hub.challenge when hub.verify_token matches ours. */
@@ -55,7 +57,8 @@ async function webhook(request: Request, env: Env, ctx: ExecutionContext, store:
     (async () => {
       await store.setValue("last_webhook_at", String(Date.now()));
       const { token } = await currentToken(store, env.IG_ACCESS_TOKEN);
-      await handleWebhook(body, { ig: new InstagramClient(token, env.GRAPH_API_VERSION || "v27.0"), store });
+      const ig = new InstagramClient(token, env.GRAPH_API_VERSION || "v27.0", undefined, detectApiMode(token, env.IG_API_MODE));
+      await handleWebhook(body, { ig, store });
     })().catch((e) => jsonLog("error", { kind: "webhook", error: String(e) })),
   );
   return new Response("EVENT_RECEIVED", { status: 200 });
@@ -95,7 +98,7 @@ export default {
         await store.init();
         await store.cleanup();
         try {
-          const r = await maybeRefreshToken(store, env.IG_ACCESS_TOKEN, { minAgeDays: 7 });
+          const r = await maybeRefreshToken(store, env.IG_ACCESS_TOKEN, { minAgeDays: 7, modeOverride: env.IG_API_MODE });
           jsonLog("token_refresh", r);
         } catch (e) {
           jsonLog("token_refresh_failed", { error: String(e) });

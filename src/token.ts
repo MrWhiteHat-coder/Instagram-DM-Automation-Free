@@ -1,4 +1,4 @@
-import { refreshLongLivedToken, type FetchLike } from "./instagram";
+import { detectApiMode, refreshLongLivedToken, type FetchLike } from "./instagram";
 import { sha256Hex } from "./signature";
 import type { Store } from "./store";
 
@@ -29,11 +29,15 @@ export async function currentToken(store: Store, secretToken: string | undefined
 export async function maybeRefreshToken(
   store: Store,
   secretToken: string | undefined,
-  opts: { force?: boolean; minAgeDays?: number; now?: number; fetchImpl?: FetchLike } = {},
+  opts: { force?: boolean; minAgeDays?: number; now?: number; fetchImpl?: FetchLike; modeOverride?: string } = {},
 ): Promise<{ refreshed: boolean; reason: string }> {
   const now = opts.now ?? Date.now();
   const info = await currentToken(store, secretToken);
   if (info.source === "missing") return { refreshed: false, reason: "IG_ACCESS_TOKEN is not set" };
+  // Unified Login gives a system-user token; its expiry is set in the Meta configuration (default: never).
+  if (detectApiMode(info.token, opts.modeOverride) === "unified") {
+    return { refreshed: false, reason: "Unified login tokens don't need refreshing" };
+  }
   const minAge = (opts.minAgeDays ?? 7) * 86_400_000;
   if (!opts.force && info.refreshedAt && now - info.refreshedAt < minAge) return { refreshed: false, reason: "token is still fresh" };
 

@@ -954,10 +954,11 @@ async function viewSettings() {
         <div style="flex:1;min-width:200px"><h3 style="font-size:15px">Instagram access token</h3>
           <p class="muted small" style="margin:2px 0 0">${
             token.source === "missing" ? "Not set. Add the IG_ACCESS_TOKEN secret."
+            : token.mode === "unified" ? "Unified login token from your IG_ACCESS_TOKEN secret. It doesn't expire, so there is nothing to refresh."
             : token.source === "refreshed" ? `Auto-refreshed ${timeAgo(token.refreshedAt)}. Tokens last 60 days; this app refreshes them weekly.`
             : "Using the token from your IG_ACCESS_TOKEN secret. It is refreshed automatically once it is at least a day old."
           }</p></div>
-        <button class="btn" data-action="refresh-token">${icon("refresh", "sm")} Refresh now</button></div>
+        ${token.mode === "unified" ? "" : `<button class="btn" data-action="refresh-token">${icon("refresh", "sm")} Refresh now</button>`}</div>
     </div>
     <div class="card card-pad mobile-only" style="margin-top:16px;justify-content:space-between;align-items:center">
       <button class="btn" data-action="theme">${icon(currentTheme() === "dark" ? "sun" : "moon")}</button>
@@ -1007,20 +1008,24 @@ function wizardContent(id, ov) {
           <ol class="wz-list">
             <li><b>Open Meta for Developers</b><p>Log in with Facebook. If asked, finish the short developer sign-up.</p><div style="margin-top:8px">${ext("https://developers.facebook.com/apps", "Open Meta for Developers")}</div></li>
             <li><b>Create the app</b><p>Click ${kbd("Create app")} → use case ${kbd("Other")} → ${kbd("Next")} → type ${kbd("Business")} → ${kbd("Next")}. Name it anything, for example <i>AutoDM</i>, add your email and create it.</p></li>
-            <li><b>Add Instagram</b><p>On the app's page find <b>Instagram</b> and click ${kbd("Set up")}. You land on <b>API setup with Instagram login</b> — keep this tab open for the next step.</p></li>
-          </ol>`,
+            <li><b>Add Instagram</b><p>On the app's page find <b>Instagram</b> and click ${kbd("Set up")}. In the left menu, under <b>Instagram</b>, open <b>API setup with Unified login</b> — keep this tab open for the next step.</p></li>
+          </ol>
+          <p class="hint">Don't see “Unified login”? Meta shows it only when the app belongs to a business portfolio (App settings → Basic). If your app shows <b>API setup with Instagram login</b> instead, that works too — follow the README's “Instagram login” notes.</p>`,
       };
     case "connect":
       return {
-        kicker: "Step 2 · about 3 minutes",
+        kicker: "Step 2 · about 10 minutes",
         title: "Connect your Instagram",
-        lead: "Give AutoDM permission to read comments and send DMs on your account.",
+        lead: "Give AutoDM permission to read comments and send DMs on your account. Do these in order on Meta's “API setup with Unified login” page.",
         body: `
           <ol class="wz-list">
-            <li><b>Add your account</b><p>In <b>API setup with Instagram login</b>, under “Generate access tokens”, click ${kbd("Add account")} and log in to Instagram.</p></li>
-            <li><b>Generate a token</b><p>Click ${kbd("Generate token")}, allow all permissions and copy the long token.</p></li>
-            <li><b>Copy the app secret</b><p>On the same page click ${kbd("Show")} next to <b>Instagram app secret</b> and copy it.</p></li>
-            <li><b>Paste both into Cloudflare</b><p>Cloudflare dashboard → <b>Workers &amp; Pages</b> → your worker → <b>Settings</b> → <b>Variables and Secrets</b>. Set <code>IG_ACCESS_TOKEN</code> to the token and <code>META_APP_SECRET</code> to the secret. If you used the Deploy button you entered them already — only update them if this step shows an error.</p><div style="margin-top:8px">${ext("https://dash.cloudflare.com/?to=/:account/workers-and-pages", "Open Cloudflare")}</div></li>
+            <li><b>Create a configuration</b><p>Under <b>1. Configure your app</b>, click ${kbd("Create new configuration")}. If asked, click ${kbd("Use this configuration")}.</p></li>
+            <li><b>Save a redirect URL</b><p>Meta needs one even though AutoDM doesn't use it. Copy this, paste it in <b>Register a new redirect URL</b> and click ${kbd("Save")}.</p>${copyBox(s.redirectUrl)}</li>
+            <li><b>Add your Instagram as a tester</b><p>Under <b>Generate access tokens</b>, click ${kbd("Add account")} and enter your Instagram username. Meta sends a tester invite.</p></li>
+            <li><b>Accept the invite</b><p>On a computer open <a href="https://www.instagram.com/" target="_blank" rel="noopener noreferrer">instagram.com</a> → <b>Settings</b> → <b>Website permissions</b> → <b>Apps and websites</b> → <b>Tester invites</b> → ${kbd("Accept")}.</p></li>
+            <li><b>Generate the token</b><p>Back in Meta, refresh the page. Next to your account click ${kbd("Generate token")}, log in and allow everything. <b>Copy the token right away</b> — Meta shows it only once. Paste it in Notepad.</p></li>
+            <li><b>Copy the app secret</b><p>Left menu ${kbd("App settings")} → ${kbd("Basic")} → <b>App secret</b> → ${kbd("Show")} → copy. (Use this one, not an “Instagram app secret”.)</p></li>
+            <li><b>Paste both into Cloudflare</b><p>Cloudflare → <b>Workers &amp; Pages</b> → your worker → <b>Settings</b> → <b>Variables and Secrets</b>. Edit <code>IG_ACCESS_TOKEN</code> → paste the token. Edit <code>META_APP_SECRET</code> → paste the app secret. Click ${kbd("Deploy")}. Both must be type <b>Secret</b>.</p><div style="margin-top:8px">${ext("https://dash.cloudflare.com/?to=/:account/workers-and-pages", "Open Cloudflare")}</div></li>
           </ol>
           ${s.tokenWorks
             ? `<div class="status-line ok">${icon("check")} Connected as @${esc(user)}</div>`
@@ -1034,7 +1039,7 @@ function wizardContent(id, ov) {
         lead: "This tells Instagram to notify AutoDM the moment someone comments.",
         body: `
           <ol class="wz-list">
-            <li><b>Open “Configure webhooks” in Meta</b><p>Still in <b>API setup with Instagram login</b>, find the webhooks section.</p></li>
+            <li><b>Open “Configure webhooks” in Meta</b><p>Same page as step 2 (<b>API setup with ${s.apiMode === "instagram" ? "Instagram" : "Unified"} login</b>), find the webhooks section.</p></li>
             <li><b>Paste these two values</b>
               <div class="label" style="margin-top:10px">Callback URL</div>${copyBox(s.webhookUrl)}
               <div class="label" style="margin-top:12px">Verify token</div>
@@ -1129,7 +1134,14 @@ async function viewSetup() {
 const KIT_KEYS = ["calls", "settings", "verification", "instructions", "permissions", "recording", "submit", "live"];
 const openKit = new Set();
 
+function permNames(ov) {
+  return ov.setup.apiMode === "instagram"
+    ? { basic: "instagram_business_basic", comments: "instagram_business_manage_comments", messages: "instagram_business_manage_messages" }
+    : { basic: "instagram_basic", comments: "instagram_manage_comments", messages: "instagram_manage_messages" };
+}
+
 function kitTexts(ov) {
+  const P = permNames(ov);
   const user = ov.account?.username ? `@${ov.account.username}` : "@your_account";
   const r = state.rules?.find((x) => x.enabled) ?? state.rules?.[0] ?? TEMPLATE;
   const kw = r.keywords[0] ?? "REPO";
@@ -1150,18 +1162,18 @@ Your test account must be added as an Instagram Tester while the app is in devel
 The owner manages automations in a private dashboard at ${location.origin} (password protected). Dashboard password for reviewers, if needed: [ADD A TEMPORARY PASSWORD OR REMOVE THIS LINE]`;
 
   const perms = {
-    instagram_business_basic: `AutoDM uses instagram_business_basic to read the connected professional account's ID, username and profile picture, which are shown in the owner's dashboard, and to list the account's own posts and reels so the owner can choose which post an automation applies to. It is also needed to refresh the account's long-lived access token. AutoDM only accesses the single account owned by the app owner.`,
-    instagram_business_manage_comments: `AutoDM uses instagram_business_manage_comments to receive webhook notifications when someone comments on the owner's posts or reels, to check whether the comment contains a keyword the owner configured (for example "${kw}"), and to post one short public reply under that comment (for example "${r.publicReplies?.[0] || "Check your DM"}"). AutoDM does not hide, delete or moderate comments and does not read comments for any other purpose.`,
-    instagram_business_manage_messages: `AutoDM uses instagram_business_manage_messages to send one private reply to a person who commented the configured keyword, to receive the postback when that person taps the button in the message, to check whether they follow the account (is_user_follow_business) when the owner requires it, and to send them the link they asked for. Messages are only sent to people who commented the keyword or tapped a button, within Meta's messaging windows. AutoDM never sends bulk, promotional or unsolicited messages.`,
+    [P.basic]: `AutoDM uses ${P.basic} to read the connected professional account's ID, username and profile picture, which are shown in the owner's dashboard, and to list the account's own posts and reels so the owner can choose which post an automation applies to. AutoDM only accesses the single account owned by the app owner.`,
+    [P.comments]: `AutoDM uses ${P.comments} to receive webhook notifications when someone comments on the owner's posts or reels, to check whether the comment contains a keyword the owner configured (for example "${kw}"), and to post one short public reply under that comment (for example "${r.publicReplies?.[0] || "Check your DM"}"). AutoDM does not hide, delete or moderate comments and does not read comments for any other purpose.`,
+    [P.messages]: `AutoDM uses ${P.messages} to send one private reply to a person who commented the configured keyword, to receive the postback when that person taps the button in the message, to check whether they follow the account (is_user_follow_business) when the owner requires it, and to send them the link they asked for. Messages are only sent to people who commented the keyword or tapped a button, within Meta's messaging windows. AutoDM never sends bulk, promotional or unsolicited messages.`,
   };
 
   const recording = `Screen recording plan (about 2 minutes, English UI, add captions):
 
-1. Open the AutoDM dashboard at ${location.origin}. Show the connected account ${user} (instagram_business_basic) and the post picker in an automation.
+1. Open the AutoDM dashboard at ${location.origin}. Show the connected account ${user} (${P.basic}) and the post picker in an automation.
 2. Show the automation: keyword "${kw}", public reply, DM text and button.
 3. On a second phone/account, open ${where} and comment "${kw}".
-4. Show the public reply appearing under the comment (instagram_business_manage_comments).
-5. Open the DMs on the second account and show the message with the "${r.dmButton}" button (instagram_business_manage_messages).
+4. Show the public reply appearing under the comment (${P.comments}).
+5. Open the DMs on the second account and show the message with the "${r.dmButton}" button (${P.messages}).
 6. Tap the button${r.requireFollow ? `, show the follow request, follow ${user}, tap "${r.followButton}"` : ""} and show the link arriving.
 7. Back in the dashboard, open Activity and show each step logged.
 
@@ -1187,6 +1199,7 @@ async function viewApproval() {
   const [ov, { settings }] = await Promise.all([loadOverview(), api("/api/settings"), state.rules ? null : loadRules().catch(() => null)]);
   const rp = state.reviewProgress ?? {};
   const t = kitTexts(ov);
+  const P = permNames(ov);
   const privacyUrl = `${location.origin}/privacy`;
   const doneCount = KIT_KEYS.filter((k) => rp[k]).length;
   const tick = (ok, label) => `<div class="row small" style="margin-top:6px">${ok ? icon("check", "sm") : icon("clock", "sm")}<span class="${ok ? "" : "muted"}">${label}</span></div>`;
@@ -1195,9 +1208,9 @@ async function viewApproval() {
     kitItem("calls", 1, "Use each permission once",
       "Meta only lets you request a permission after it has been used successfully in the last 30 days.",
       `<p>Doing the tester test in Setup covers all three. Meta says calls can take up to 2 days to show in the dashboard.</p>
-       ${tick(ov.setup.tokenWorks, "<code>instagram_business_basic</code> — account loaded")}
-       ${tick((ov.totals.public_reply_sent || 0) > 0, "<code>instagram_business_manage_comments</code> — public reply sent")}
-       ${tick((ov.totals.dm_sent || 0) > 0, "<code>instagram_business_manage_messages</code> — DM sent")}`, rp),
+       ${tick(ov.setup.tokenWorks, `<code>${P.basic}</code> — account loaded`)}
+       ${tick((ov.totals.public_reply_sent || 0) > 0, `<code>${P.comments}</code> — public reply sent`)}
+       ${tick((ov.totals.dm_sent || 0) > 0, `<code>${P.messages}</code> — DM sent`)}`, rp),
     kitItem("settings", 2, "Fill in your app settings",
       "In Meta: App settings → Basic. App Review asks for these four things.",
       `<h4>Privacy policy URL</h4><p class="muted small">AutoDM hosts one for you. It uses the details below.</p>${copyBox(privacyUrl)}
@@ -1230,8 +1243,10 @@ async function viewApproval() {
     kitItem("submit", 7, "Submit for review",
       "Meta's guide says a decision usually comes within a week.",
       `<ol class="wz-list">
-         <li><b>Open App Review</b><p>${kbd("Instagram")} → ${kbd("API setup with Instagram login")} → click the arrow on <b>Complete app review</b> → ${kbd("Continue to app review")} → ${kbd("Edit")}.</p></li>
-         <li><b>Request Advanced Access</b><p>For <code>instagram_business_basic</code>, <code>instagram_business_manage_comments</code> and <code>instagram_business_manage_messages</code>. Paste the texts from items 4–5 and upload the recording.</p></li>
+         <li><b>Open App Review</b><p>${ov.setup.apiMode === "instagram"
+           ? `${kbd("Instagram")} → ${kbd("API setup with Instagram login")} → click the arrow on <b>Complete app review</b> → ${kbd("Continue to app review")} → ${kbd("Edit")}.`
+           : `In the left menu open ${kbd("App Review")} and find the permission requests (Meta labels this “Permissions and features” or “Requests”).`}</p></li>
+         <li><b>Request Advanced Access — only these three</b><p><code>${P.basic}</code>, <code>${P.comments}</code> and <code>${P.messages}</code>. Paste the texts from items 4–5 and upload the recording. Don't request permissions AutoDM doesn't use (like ads or publishing) — Meta rejects requests for unused permissions.</p></li>
          <li><b>Submit</b><p>Click ${kbd("Submit for Review")} and accept the terms. If it's rejected, Meta tells you why — fix it and submit again.</p></li>
        </ol>`, rp),
     kitItem("live", 8, "Switch to Live",

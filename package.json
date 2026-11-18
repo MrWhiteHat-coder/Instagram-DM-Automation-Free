@@ -21,10 +21,10 @@
   "cloudflare": {
     "bindings": {
       "META_APP_SECRET": {
-        "description": "The **Instagram app secret** from Meta App Dashboard → Instagram → API setup with Instagram login."
+        "description": "Meta **App secret** (App settings → Basic). Put `temp` first if you don't have it yet."
       },
       "IG_ACCESS_TOKEN": {
-        "description": "Long-lived Instagram token from the same page (**Generate token**). AutoDM refreshes it automatically."
+        "description": "Token from Meta → Instagram → API setup → **Generate token**. Put `temp` first if you don't have it yet."
       },
       "WEBHOOK_VERIFY_TOKEN": {
         "description": "Any random text. Paste the same value into Meta's **Verify token** box. Generate one with `openssl rand -hex 16`."
