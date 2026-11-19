@@ -11,6 +11,8 @@ Someone comments a keyword like **`REPO`** on your reel → they get a DM with a
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/MrWhiteHat-coder/Instagram-DM-Automation-Free)
 
+📘 **New here? Read the step-by-step [Setup Guide (PDF)](docs/AutoDM-Setup-Guide.pdf)** — the whole setup with screenshots, from deploy to Meta approval.
+
 > **Read this before you start.** Meta's rules apply to every tool like this, including paid ones.
 > Until Meta approves **your** Meta app (App Review + Business Verification, then switched to *Live*), AutoDM only replies to Instagram accounts you added as **testers** in that app. Real followers need the approval. Details in [Going public](#going-public).
 
