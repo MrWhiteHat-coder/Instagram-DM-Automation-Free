@@ -20,12 +20,33 @@ export const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS events_rule ON events(rule_id, type)`,
   `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS login_attempts (ip TEXT PRIMARY KEY, count INTEGER NOT NULL, window_start INTEGER NOT NULL)`,
+  // Comments whose private reply failed, so they can be retried inside Meta's 7-day window.
+  `CREATE TABLE IF NOT EXISTS failed_dms (
+    comment_id TEXT PRIMARY KEY, ig_id TEXT NOT NULL, rule_id TEXT NOT NULL, user_id TEXT NOT NULL, username TEXT,
+    text TEXT, commented_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT
+  )`,
 ];
+
+/** Meta allows the private reply up to 7 days after the comment. Keep a margin so a retry isn't sent too late. */
+export const RETRY_WINDOW_MS = 7 * 86_400_000 - 30 * 60_000;
+
+export interface FailedDm {
+  commentId: string;
+  igId: string;
+  ruleId: string;
+  userId: string;
+  username: string | null;
+  text: string;
+  commentedAt: number;
+  attempts: number;
+  lastError: string | null;
+}
 
 export type EventType =
   | "comment_matched"
   | "dm_sent"
   | "dm_failed"
+  | "dm_retry_failed"
   | "public_reply_sent"
   | "public_reply_failed"
   | "skipped_cooldown"
@@ -142,6 +163,53 @@ export class Store {
     await this.db.prepare("DELETE FROM pending WHERE user_id = ?").bind(userId).run();
   }
 
+  // ---------- failed private replies (retry queue) ----------
+  async saveFailed(f: Omit<FailedDm, "attempts" | "lastError" | "commentedAt"> & { error: string; commentedAt?: number }): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO failed_dms (comment_id, ig_id, rule_id, user_id, username, text, commented_at, attempts, last_error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+         ON CONFLICT(comment_id) DO UPDATE SET last_error = excluded.last_error`,
+      )
+      .bind(f.commentId, f.igId, f.ruleId, f.userId, f.username, f.text.slice(0, 500), f.commentedAt ?? this.now(), f.error.slice(0, 500))
+      .run();
+  }
+
+  /** Oldest first, so comments closest to the 7-day limit are retried first. */
+  async listFailed(limit: number, maxAttempts: number): Promise<FailedDm[]> {
+    const { results } = await this.db
+      .prepare("SELECT * FROM failed_dms WHERE commented_at > ? AND attempts < ? ORDER BY commented_at ASC LIMIT ?")
+      .bind(this.now() - RETRY_WINDOW_MS, maxAttempts, Math.max(1, Math.floor(limit)))
+      .all<any>();
+    return results.map((r) => ({
+      commentId: r.comment_id,
+      igId: r.ig_id,
+      ruleId: r.rule_id,
+      userId: r.user_id,
+      username: r.username,
+      text: r.text ?? "",
+      commentedAt: r.commented_at,
+      attempts: r.attempts,
+      lastError: r.last_error,
+    }));
+  }
+
+  async countFailed(maxAttempts: number): Promise<{ count: number; oldest: number | null }> {
+    const row = await this.db
+      .prepare("SELECT COUNT(*) AS n, MIN(commented_at) AS oldest FROM failed_dms WHERE commented_at > ? AND attempts < ?")
+      .bind(this.now() - RETRY_WINDOW_MS, maxAttempts)
+      .first<{ n: number; oldest: number | null }>();
+    return { count: Number(row?.n ?? 0), oldest: row?.oldest ?? null };
+  }
+
+  async markFailedAttempt(commentId: string, error: string): Promise<void> {
+    await this.db.prepare("UPDATE failed_dms SET attempts = attempts + 1, last_error = ? WHERE comment_id = ?").bind(error.slice(0, 500), commentId).run();
+  }
+
+  async deleteFailed(commentId: string): Promise<void> {
+    await this.db.prepare("DELETE FROM failed_dms WHERE comment_id = ?").bind(commentId).run();
+  }
+
   // ---------- activity log ----------
   async logEvent(type: EventType, f: { ruleId?: string; userId?: string; username?: string | null; detail?: string } = {}): Promise<void> {
     await this.db
@@ -255,6 +323,7 @@ export class Store {
       this.db.prepare("DELETE FROM pending WHERE expires_at <= ?").bind(now),
       this.db.prepare("DELETE FROM events WHERE ts < ?").bind(now - 90 * DAY_MS),
       this.db.prepare("DELETE FROM login_attempts WHERE window_start < ?").bind(now - DAY_MS),
+      this.db.prepare("DELETE FROM failed_dms WHERE commented_at <= ?").bind(now - RETRY_WINDOW_MS),
     ]);
   }
 }

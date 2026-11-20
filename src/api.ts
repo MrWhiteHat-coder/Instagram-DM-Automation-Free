@@ -1,4 +1,5 @@
 import { createSession, passwordMatches, readCookie, SESSION_COOKIE, sessionCookie, verifySession } from "./auth";
+import { RETRY_MAX_ATTEMPTS, retryFailed } from "./flow";
 import { detectApiMode, InstagramClient } from "./instagram";
 import { findRule, parseRuleInput, parseSettingsInput } from "./rules";
 import type { Store } from "./store";
@@ -18,6 +19,8 @@ export interface ApiContext {
   store: Store;
   /** Lets tests swap out the network. */
   makeClient?: (token: string) => InstagramClient;
+  /** Pause between retried DMs (tests set 0). */
+  retryPauseMs?: number;
 }
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -199,6 +202,14 @@ export async function handleApi(request: Request, ctx: ApiContext): Promise<Resp
       }
       await store.setValue("review_progress", JSON.stringify(progress));
       return json({ progress });
+    }
+
+    if (path === "/api/failed" && method === "GET") {
+      return json(await store.countFailed(RETRY_MAX_ATTEMPTS));
+    }
+    if (path === "/api/failed/retry" && method === "POST") {
+      // Small batches with a pause between DMs, so a retry doesn't run into Meta's rate limit again.
+      return json(await retryFailed({ ig: await client(), store }, { max: 10, pauseMs: ctx.retryPauseMs ?? 1500 }));
     }
 
     if (path === "/api/token/refresh" && method === "POST") {

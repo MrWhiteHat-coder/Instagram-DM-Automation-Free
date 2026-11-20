@@ -1,5 +1,5 @@
 import { handleApi } from "./api";
-import { handleWebhook, jsonLog } from "./flow";
+import { handleWebhook, jsonLog, retryFailed } from "./flow";
 import { detectApiMode, InstagramClient } from "./instagram";
 import { privacyHtml } from "./privacy";
 import { verifySignature } from "./signature";
@@ -102,7 +102,7 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 
-  /** Daily: clean old rows and keep the 60-day access token alive. */
+  /** Daily: clean old rows, keep the 60-day access token alive and retry failed DMs. */
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const store = new Store(env.DB);
     ctx.waitUntil(
@@ -115,6 +115,15 @@ export default {
         } catch (e) {
           jsonLog("token_refresh_failed", { error: String(e) });
           await store.logEvent("error", { detail: `Token refresh failed: ${String(e)}` });
+        }
+        try {
+          const { token } = await currentToken(store, env.IG_ACCESS_TOKEN);
+          if (token) {
+            const ig = new InstagramClient(token, env.GRAPH_API_VERSION || "v27.0", undefined, detectApiMode(token, env.IG_API_MODE));
+            jsonLog("retry_failed", { ...(await retryFailed({ ig, store }, { max: 15, pauseMs: 2000 })) });
+          }
+        } catch (e) {
+          jsonLog("retry_failed_error", { error: String(e) });
         }
       })(),
     );

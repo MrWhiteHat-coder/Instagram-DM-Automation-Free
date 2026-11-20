@@ -181,3 +181,19 @@ describe("Unified login vs Instagram login", () => {
     expect(ig.calls.map((c) => c.path.split("?")[0])).toEqual(["/me", "/me/media", "/me/subscribed_apps"]);
   });
 });
+
+describe("retry failed DMs endpoint", () => {
+  it("needs a session, reports the count and retries", async () => {
+    const c = await ctx();
+    c.retryPauseMs = 0;
+    expect((await handleApi(req("/api/failed/retry", { method: "POST", body: {} }), c)).status).toBe(401);
+    const cookie = await login(c);
+    await c.store.saveRule(makeRule());
+    await c.store.saveFailed({ commentId: "c1", igId: "17841400000000000", ruleId: "repo", userId: "9990001", username: "tester", text: "repo", error: "limit" });
+    const count = await (await handleApi(req("/api/failed", { cookie }), c)).json();
+    expect(count.count).toBe(1);
+    const res = await handleApi(req("/api/failed/retry", { method: "POST", body: {}, cookie }), c);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ sent: 1, failed: 0, remaining: 0 });
+  });
+});

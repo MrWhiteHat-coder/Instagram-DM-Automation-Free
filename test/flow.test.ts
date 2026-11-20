@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { handleWebhook, type Deps } from "../src/flow";
+import { handleWebhook, retryFailed, type Deps } from "../src/flow";
 import type { Store } from "../src/store";
 import { fakeApi, IG_ID, makeRule, makeStore, USER } from "./helpers";
 
@@ -132,6 +132,69 @@ describe("comment -> private reply", () => {
     expect(events[0].detail).toContain("outside allowed window");
     await handleWebhook(commentEvent("c2", "repo"), deps); // not blocked by cooldown
     expect((await eventTypes()).filter((t) => t === "dm_failed")).toHaveLength(2);
+  });
+});
+
+describe("retry failed DMs", () => {
+  const noPause = { pauseMs: 0 };
+
+  it("re-sends the private reply for a failed comment, once", async () => {
+    await setup({ failPrivateReply: true });
+    await handleWebhook(commentEvent("c1", "repo"), deps);
+    expect((await store.countFailed(3)).count).toBe(1);
+
+    api.state.failPrivateReply = false;
+    const r = await retryFailed(deps, noPause);
+    expect(r).toMatchObject({ sent: 1, failed: 0, remaining: 0, stoppedForRateLimit: false });
+    const last = privateReplies().at(-1)!;
+    expect(last.body.recipient).toEqual({ comment_id: "c1" });
+    expect(publicReplies()).toHaveLength(1);
+    const dm = (await store.listEvents(5)).find((e) => e.type === "dm_sent");
+    expect(dm?.detail).toContain("retry");
+
+    const again = await retryFailed(deps, noPause); // nothing left
+    expect(again.sent).toBe(0);
+    expect(privateReplies().filter((c) => c.body.recipient.comment_id === "c1")).toHaveLength(3); // button + text failed, then the retried button DM
+  });
+
+  it("stops at the first rate-limit error", async () => {
+    await setup({ failPrivateReply: true });
+    await store.saveSettings({ ...(await store.getSettings()), cooldownDays: 0 });
+    for (const [c, u] of [["c1", "u1"], ["c2", "u2"], ["c3", "u3"]]) await handleWebhook(commentEvent(c, "repo", u), deps);
+    api.state.failPrivateReply = false;
+    api.state.rateLimitPrivateReply = true;
+    const before = privateReplies().length;
+    const r = await retryFailed(deps, noPause);
+    expect(r).toMatchObject({ sent: 0, failed: 1, stoppedForRateLimit: true, remaining: 3 });
+    expect(privateReplies().length - before).toBe(1); // no text fallback, no further comments
+  });
+
+  it("gives up after 3 attempts and skips people already messaged", async () => {
+    await setup({ failPrivateReply: true });
+    await handleWebhook(commentEvent("c1", "repo"), deps);
+    for (let i = 0; i < 3; i++) await retryFailed(deps, noPause);
+    expect((await store.countFailed(3)).count).toBe(0);
+    expect((await eventTypes()).filter((t) => t === "dm_retry_failed")).toHaveLength(3);
+
+    api.state.failPrivateReply = false;
+    await handleWebhook(commentEvent("c2", "repo"), deps); // new comment works
+    await store.saveFailed({ commentId: "c9", igId: IG_ID, ruleId: "repo", userId: USER, username: "tester", text: "repo", error: "x" });
+    const r = await retryFailed(deps, noPause);
+    expect(r).toMatchObject({ sent: 0, skipped: 1 }); // cooldown: they already got the DM
+  });
+
+  it("drops comments older than Meta's 7-day window", async () => {
+    let now = Date.now();
+    api = fakeApi({ failPrivateReply: true });
+    store = await makeStore(() => now);
+    await store.saveRule(makeRule());
+    deps = { ig: api.client, store };
+    await handleWebhook(commentEvent("c1", "repo"), deps);
+    now += 7 * 86_400_000;
+    api.state.failPrivateReply = false;
+    const r = await retryFailed(deps, noPause);
+    expect(r.sent).toBe(0);
+    expect(privateReplies().filter((c) => !c.body.message.attachment)).toHaveLength(1); // only the original text fallback
   });
 });
 

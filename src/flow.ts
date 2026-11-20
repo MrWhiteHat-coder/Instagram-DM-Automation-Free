@@ -102,27 +102,47 @@ export async function handleComment(igId: string, value: any, deps: Deps): Promi
   await store.logEvent("comment_matched", { ruleId: rule.id, userId, username, detail: text });
 
   // 1) The one private reply Meta allows for this comment. Button first, plain text if refused.
-  let recipientId: string | undefined;
-  let usedButton = true;
+  let sent: { recipientId?: string; usedButton: boolean };
   try {
-    try {
-      const res = await ig.privateReply(igId, commentId, buttonMessage(rule.dmText, [{ type: "postback", title: rule.dmButton, payload: `LINK:${rule.id}` }]));
-      recipientId = res?.recipient_id;
-    } catch (e) {
-      jsonLog("private_reply_button_failed", { commentId, error: errText(e) });
-      usedButton = false;
-      const res = await ig.privateReply(igId, commentId, textMessage(`${rule.dmText}\n\n${settings.fallbackHint}`));
-      recipientId = res?.recipient_id;
-    }
+    sent = await sendPrivateReply(ig, igId, commentId, rule, settings);
   } catch (e) {
     await store.release(userKey); // let them try again with a new comment
     await store.logEvent("dm_failed", { ruleId: rule.id, userId, username, detail: errText(e) });
+    // Keep it so "Retry failed" can send it later (still inside Meta's 7-day window).
+    await store.saveFailed({ commentId, igId, ruleId: rule.id, userId, username, text, error: errText(e) });
     return;
   }
 
+  await afterDmSent(ig, store, commentId, rule, userId, username, sent, sent.usedButton ? "with button" : "plain text fallback");
+}
+
+async function sendPrivateReply(ig: InstagramClient, igId: string, commentId: string, rule: Rule, settings: Settings) {
+  try {
+    const res = await ig.privateReply(igId, commentId, buttonMessage(rule.dmText, [{ type: "postback", title: rule.dmButton, payload: `LINK:${rule.id}` }]));
+    return { recipientId: res?.recipient_id, usedButton: true };
+  } catch (e) {
+    if (isRateLimit(e)) throw e; // a text retry would hit the same limit
+    jsonLog("private_reply_button_failed", { commentId, error: errText(e) });
+    const res = await ig.privateReply(igId, commentId, textMessage(`${rule.dmText}
+
+${settings.fallbackHint}`));
+    return { recipientId: res?.recipient_id, usedButton: false };
+  }
+}
+
+async function afterDmSent(
+  ig: InstagramClient,
+  store: Store,
+  commentId: string,
+  rule: Rule,
+  userId: string,
+  username: string | null,
+  sent: { recipientId?: string },
+  detail: string,
+) {
   await store.setPending(userId, rule.id, username);
-  if (recipientId && recipientId !== userId) await store.setPending(recipientId, rule.id, username);
-  await store.logEvent("dm_sent", { ruleId: rule.id, userId, username, detail: usedButton ? "with button" : "plain text fallback" });
+  if (sent.recipientId && sent.recipientId !== userId) await store.setPending(sent.recipientId, rule.id, username);
+  await store.logEvent("dm_sent", { ruleId: rule.id, userId, username, detail });
 
   // 2) Public reply, only after the DM really went out ("Check your DM" must be true).
   if (rule.publicReplies.length) {
@@ -134,6 +154,77 @@ export async function handleComment(igId: string, value: any, deps: Deps): Promi
       await store.logEvent("public_reply_failed", { ruleId: rule.id, userId, username, detail: errText(e) });
     }
   }
+}
+
+/** Meta's rate-limit error codes (4, 17, 32, 613) and the Instagram "too many" messages. */
+export function isRateLimit(e: unknown): boolean {
+  const body: any = (e as any)?.body;
+  const code = Number(body?.error?.code);
+  if ([4, 17, 32, 613].includes(code) || (e as any)?.status === 429) return true;
+  return /rate limit|too many|limit reached|request limit/i.test(errText(e));
+}
+
+export const RETRY_MAX_ATTEMPTS = 3;
+
+export interface RetryResult {
+  sent: number;
+  failed: number;
+  skipped: number;
+  remaining: number;
+  stoppedForRateLimit: boolean;
+}
+
+/**
+ * Re-sends the private reply for comments whose DM failed, oldest first, one at a time with a pause,
+ * and stops at the first rate-limit error. Each comment is tried at most RETRY_MAX_ATTEMPTS times.
+ */
+export async function retryFailed(
+  deps: Deps,
+  opts: { max?: number; pauseMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<RetryResult> {
+  const { ig, store } = deps;
+  const max = Math.min(Math.max(1, opts.max ?? 10), 25);
+  const pauseMs = opts.pauseMs ?? 1500;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const settings = await store.getSettings();
+  const result: RetryResult = { sent: 0, failed: 0, skipped: 0, remaining: 0, stoppedForRateLimit: false };
+
+  const rows = await store.listFailed(max, RETRY_MAX_ATTEMPTS);
+  let calledApi = false;
+  for (const f of rows) {
+    const rule = await store.getRule(f.ruleId);
+    if (!rule || !rule.enabled) {
+      await store.deleteFailed(f.commentId); // automation deleted or paused: don't message people for it
+      result.skipped++;
+      continue;
+    }
+    const userKey = `user:${f.userId}:${rule.id}`;
+    if (settings.cooldownDays > 0 && !(await store.claim(userKey, settings.cooldownDays * DAY))) {
+      await store.deleteFailed(f.commentId); // they already got this automation's DM from another comment
+      result.skipped++;
+      continue;
+    }
+
+    if (calledApi && pauseMs > 0) await sleep(pauseMs);
+    calledApi = true;
+    try {
+      const sent = await sendPrivateReply(ig, f.igId, f.commentId, rule, settings);
+      await store.deleteFailed(f.commentId);
+      await afterDmSent(ig, store, f.commentId, rule, f.userId, f.username, sent, `retry · ${sent.usedButton ? "with button" : "plain text fallback"}`);
+      result.sent++;
+    } catch (e) {
+      await store.release(userKey);
+      await store.markFailedAttempt(f.commentId, errText(e));
+      await store.logEvent("dm_retry_failed", { ruleId: rule.id, userId: f.userId, username: f.username, detail: errText(e) });
+      result.failed++;
+      if (isRateLimit(e)) {
+        result.stoppedForRateLimit = true;
+        break;
+      }
+    }
+  }
+  result.remaining = (await store.countFailed(RETRY_MAX_ATTEMPTS)).count;
+  return result;
 }
 
 export async function handleMessaging(igId: string, event: any, deps: Deps): Promise<void> {

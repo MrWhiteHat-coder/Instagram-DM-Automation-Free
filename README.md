@@ -136,7 +136,7 @@ Meta's docs say comment webhooks for people without a role on your app need **Ad
 - **One private reply per comment**, within **7 days** of the comment. More messages only after the person responds, within 24 hours.
 - **Buttons in the first DM**: Meta's private-reply docs only show a text example. AutoDM tries the button; if Instagram refuses it, it sends text ending with "Reply YES to get the link." and treats their reply as the tap (changeable in Settings).
 - **Follow check needs consent**: Instagram shares follow status only after the person has messaged you. A button tap may not count. If the check fails, Settings decides: send the link anyway (default) or ask them to follow.
-- **750 private replies per hour** per account. A viral reel can hit this; extra comments in that hour fail and show in Activity.
+- **750 private replies per hour** per account (much lower while your Meta app is in Development mode). A viral reel can hit this; extra comments in that hour fail and show in Activity. Press **Retry failed** on the Activity page to send them again, 10 at a time with a pause between DMs; AutoDM also retries once a day by itself. Each comment is tried up to 3 times and only within Meta's 7-day window.
 - Your account must be **public**. Live video comments are not handled.
 
 Sources are listed in [docs/META_DOCS.md](docs/META_DOCS.md).

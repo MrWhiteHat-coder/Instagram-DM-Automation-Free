@@ -47,7 +47,7 @@ export interface Call {
 /** Fake graph.instagram.com. `state` steers its answers during a test. */
 export function fakeApi(opts: { follows?: boolean | "error"; rejectTemplatePrivateReply?: boolean; failPrivateReply?: boolean } = {}) {
   const calls: Call[] = [];
-  const state = { follows: opts.follows ?? true };
+  const state = { follows: opts.follows ?? true, failPrivateReply: opts.failPrivateReply ?? false, rateLimitPrivateReply: false };
   const fetchImpl = async (input: string, init: RequestInit = {}) => {
     const url = new URL(input);
     const method = init.method ?? "GET";
@@ -70,7 +70,8 @@ export function fakeApi(opts: { follows?: boolean | "error"; rejectTemplatePriva
     }
     if (url.pathname.endsWith("/replies")) return json({ id: "reply1" });
     if (body?.recipient?.comment_id) {
-      if (opts.failPrivateReply) return json({ error: { message: "outside allowed window", code: 10 } }, 400);
+      if (state.rateLimitPrivateReply) return json({ error: { message: "Application request limit reached", code: 4 } }, 400);
+      if (state.failPrivateReply) return json({ error: { message: "outside allowed window", code: 10 } }, 400);
       if (body.message.attachment && opts.rejectTemplatePrivateReply) return json({ error: { message: "templates not allowed here" } }, 400);
     }
     return json({ recipient_id: USER, message_id: "m_out" });

@@ -183,6 +183,7 @@ const EVENT_META = {
   skipped_cooldown: { label: "Skipped · cooldown", tone: "slate", icon: "clock" },
   comment_ignored: { label: "Comment ignored", tone: "slate", icon: "comment" },
   dm_failed: { label: "DM failed", tone: "red", icon: "alert" },
+  dm_retry_failed: { label: "Retry failed", tone: "red", icon: "alert" },
   public_reply_failed: { label: "Reply failed", tone: "red", icon: "alert" },
   follow_check_failed: { label: "Follow check failed", tone: "red", icon: "alert" },
   error: { label: "Error", tone: "red", icon: "alert" },
@@ -890,7 +891,11 @@ const FILTERS = {
 async function viewActivity(params) {
   renderShell("activity", `<div class="page">${pageHead("Activity", "Loading…")}<div class="card skeleton" style="height:320px"></div></div>`);
   const ruleId = params.get("rule");
-  const [{ events }] = await Promise.all([api(`/api/events?limit=300${ruleId ? `&rule=${encodeURIComponent(ruleId)}` : ""}`), state.rules ? null : loadRules()]);
+  const [{ events }, failed] = await Promise.all([
+    api(`/api/events?limit=300${ruleId ? `&rule=${encodeURIComponent(ruleId)}` : ""}`),
+    api("/api/failed").catch(() => ({ count: 0 })),
+    state.rules ? null : loadRules(),
+  ]);
   let filter = "all";
   const draw = () => {
     const list = events.filter((e) => FILTERS[filter].match(e.type));
@@ -898,7 +903,11 @@ async function viewActivity(params) {
     renderShell(
       "activity",
       `<div class="page">
-      ${pageHead("Activity", rn ? `Showing <b>${esc(rn)}</b> · <a href="#/activity">show all</a>` : "Every comment, DM and link, newest first. Kept for 90 days.", `<button class="btn" data-action="reload">${icon("refresh", "sm")} Refresh</button>`)}
+      ${pageHead(
+        "Activity",
+        rn ? `Showing <b>${esc(rn)}</b> · <a href="#/activity">show all</a>` : "Every comment, DM and link, newest first. Kept for 90 days.",
+        `${failed.count ? `<button class="btn primary" data-action="retry-failed" title="Sends the DM again to comments from the last 7 days whose DM failed, 10 at a time">${icon("refresh", "sm")} Retry ${failed.count} failed</button>` : ""}<button class="btn" data-action="reload">${icon("refresh", "sm")} Refresh</button>`,
+      )}
       <div class="filters" style="margin-bottom:14px">${Object.entries(FILTERS)
         .map(([k, f]) => `<button class="filter ${k === filter ? "on" : ""}" data-filter="${k}">${f.label} <span class="muted">${events.filter((e) => f.match(e.type)).length}</span></button>`)
         .join("")}</div>
@@ -1364,6 +1373,23 @@ const actions = {
     } finally {
       el.disabled = false;
     }
+  },
+  "retry-failed": async (el) => {
+    el.disabled = true;
+    el.innerHTML = '<span class="spinner"></span> Sending…';
+    try {
+      const r = await api("/api/failed/retry", { method: "POST", body: {} });
+      const parts = [`${r.sent} sent`];
+      if (r.failed) parts.push(`${r.failed} failed again`);
+      if (r.skipped) parts.push(`${r.skipped} skipped`);
+      let msg = `Retry: ${parts.join(", ")}.`;
+      if (r.stoppedForRateLimit) msg += " Instagram's limit was reached, try again in an hour.";
+      else if (r.remaining) msg += ` ${r.remaining} left, press again in a minute.`;
+      toast(msg, r.sent || !r.failed ? "ok" : "error");
+    } catch (e) {
+      reportError(e);
+    }
+    route();
   },
   "refresh-token": async (el) => {
     el.disabled = true;
